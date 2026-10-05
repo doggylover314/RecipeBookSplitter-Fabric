@@ -19,7 +19,23 @@ dependencies {
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    // Not a dependency of the mod. It is only on the dev/test runtime classpath so the tests run with Fabric API's
+    // PacketEncoder mixins (fabric-networking-api-v1, fabric-recipe-api-v1) applied, as on a real server.
+    // Loom has no modTestImplementation, so modLocalRuntime is the way to get a mod onto the test runtime classpath.
+    modLocalRuntime "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+    // JUnit 5 plus a Knot launcher session, so Minecraft classes and our mixins are available in tests.
+    testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    // fabric-loader-junit defaults to the client side; the mod is "environment": "server", so its mixins would not load.
+    systemProperty 'fabric.side', 'server'
+    testLogging {
+        exceptionFormat = 'full'
+        events 'passed', 'skipped', 'failed'
+    }
 }
 
 processResources {

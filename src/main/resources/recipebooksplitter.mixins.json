@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.recipebooksplitter.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "server": [
+    "ConnectionAccessor",
+    "ConnectionMixin",
+    "PacketEncoderInvoker",
+    "PacketEncoderMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

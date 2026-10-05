@@ -4,3 +4,7 @@ run/
 out/
 *.iml
 .idea/
+e2e/work/
+__pycache__/
+*.pyc
+logs/
