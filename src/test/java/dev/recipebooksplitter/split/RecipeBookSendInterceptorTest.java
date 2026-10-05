@@ -3,6 +3,7 @@ package dev.recipebooksplitter.split;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.recipebooksplitter.RecipeBookSplitter;
@@ -13,7 +14,9 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import net.minecraft.network.HandlerNames;
 import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
@@ -99,25 +102,36 @@ class RecipeBookSendInterceptorTest {
         }
     }
 
+    /** The realistic case: Netty tears the pipeline down in a later task, so right after a close it is still intact. */
     @Test
-    void closedChannelIsNotMeasured() throws Exception {
-        AtomicInteger encodes = new AtomicInteger();
-        PacketEncoder<ClientGamePacketListener> counting = new PacketEncoder<>(RecipeFixtures.protocol()) {
-            @Override
-            protected void encode(ChannelHandlerContext ctx, Packet<ClientGamePacketListener> packet, ByteBuf out) throws Exception {
-                encodes.incrementAndGet();
-                super.encode(ctx, packet, out);
-            }
-        };
-        try (TestConnection test = TestConnection.create(counting); LogCapture log = new LogCapture("RecipeBookSplitter")) {
-            test.channel().close();
+    void closedChannelWithIntactPipelineIsNotMeasured() throws Exception {
+        try (LocalConnection local = new LocalConnection(true); LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            ClientboundRecipeBookAddPacket book = book(400);
+            AtomicBoolean pipelineIntact = new AtomicBoolean();
 
             // What the scheduled task does when the client left before it ran.
-            RecipeBookSendInterceptor.splitAndWrite(test.connection(), test.channel(), book(400), null, true);
+            local.child.eventLoop().submit(() -> {
+                local.child.close();
+                pipelineIntact.set(local.child.pipeline().get(HandlerNames.ENCODER) != null);
+                RecipeBookSendInterceptor.splitAndWrite(local.connection, local.child, book, null, true);
+            }).sync();
 
-            assertEquals(0, encodes.get(), "no probe encodes for a closed channel");
-            assertEquals(List.of(), log.entries(), "nothing to report, in particular no missing-encoder warning");
-            assertFalse(RecipeBookSendInterceptor.WARNED_NO_ENCODER.get());
+            assertTrue(pipelineIntact.get(), "the test is only meaningful while the encoder is still there");
+            assertEquals(0, local.encodes.get(), "no probe encodes for a closed channel");
+            assertEquals(List.of(), log.entries());
+        }
+    }
+
+    @Test
+    void closedChannelWithoutPipelineDoesNotSpendTheNoEncoderWarning() throws Exception {
+        try (LocalConnection local = new LocalConnection(true); LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            local.child.close().sync();
+            LocalConnection.awaitUntil(() -> local.child.pipeline().get(HandlerNames.ENCODER) == null, "the pipeline was not torn down");
+
+            RecipeBookSendInterceptor.splitAndWrite(local.connection, local.child, book(400), null, true);
+
+            assertEquals(List.of(), log.entries());
+            assertFalse(RecipeBookSendInterceptor.WARNED_NO_ENCODER.get(), "a dead connection must not use up the one-time warning");
         }
     }
 
@@ -143,9 +157,12 @@ class RecipeBookSendInterceptorTest {
 
             local.connection.send(first);
             local.connection.send(second);
-            LocalConnection.awaitUntil(() -> local.recorder.messages.contains(second), "the packets were never written");
+            // Wait by identity: the two books are equal, so contains() would return as soon as the first is written.
+            LocalConnection.awaitUntil(() -> local.recorder.messages.stream().anyMatch(message -> message == second), "the packets were never written");
 
-            assertEquals(List.of(first, second), local.recorder.messages, "both are sent unsplit");
+            assertEquals(2, local.recorder.messages.size(), "both are sent unsplit");
+            assertSame(first, local.recorder.messages.get(0));
+            assertSame(second, local.recorder.messages.get(1));
             assertEquals(1, log.messages(Level.WARN).size(), log.entries().toString());
             assertTrue(log.messages(Level.WARN).get(0).contains("no PacketEncoder named 'encoder'"));
             assertEquals(1, log.messages(Level.DEBUG).size(), "the second one is only logged at DEBUG");

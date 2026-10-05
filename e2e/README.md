@@ -29,7 +29,7 @@ network access for the downloads. Ports 25565 (server) and 25577 (Velocity) must
 
 Every mod scenario has two phases, each with its own login: phase 1 joins and then runs `recipe give Tester *`
 (a `replace=false` packet with all recipes); phase 2 relogs (the initial recipe book, `replace=true`, with all
-recipes. Fabric API 0.141.6 is loaded in every scenario except E3b.
+recipes). Fabric API 0.141.6 is loaded in every scenario except E3b.
 
 | ID | Mods | Network compression of the server | What is expected |
 |---|---|---|---|

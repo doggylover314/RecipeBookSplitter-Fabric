@@ -52,10 +52,12 @@ public final class RecipeBookSendInterceptor {
 
     /**
      * @return true if the packet was taken over (the caller must cancel the original send), false to let vanilla
-     *         send it. Never throws: whatever goes wrong before the work is scheduled leaves the packet to vanilla.
+     *         send it. Never throws: whatever goes wrong before the work is scheduled or started leaves the packet to
+     *         vanilla.
      */
     public static boolean onSend(Connection connection, ClientboundRecipeBookAddPacket packet,
                                  @Nullable ChannelFutureListener listener, boolean flush) {
+        boolean handedOver = false;
         try {
             // Nothing to split with fewer than two entries; this also keeps the common case free of any other work.
             if (packet.entries().size() < 2 || packet == RESENDING.get()) {
@@ -69,6 +71,7 @@ public final class RecipeBookSendInterceptor {
             Channel channel = ((ConnectionAccessor) connection).recipebooksplitter$getChannel();
             EventLoop loop = channel.eventLoop();
             if (loop.inEventLoop()) {
+                handedOver = true; // from here on chunks may already be written, so vanilla must not send the original too
                 splitAndWrite(connection, channel, packet, listener, flush);
             } else {
                 loop.execute(() -> splitAndWrite(connection, channel, packet, listener, flush));
@@ -78,8 +81,8 @@ public final class RecipeBookSendInterceptor {
             // The event loop is shutting down; behave exactly like vanilla.
             return false;
         } catch (Throwable t) {
-            LOGGER.debug("[RecipeBookSplitter] could not take over a recipe book packet, leaving it to vanilla", t);
-            return false;
+            LOGGER.debug("[RecipeBookSplitter] problem while taking over a recipe book packet (taken over: {})", handedOver, t);
+            return handedOver;
         }
     }
 

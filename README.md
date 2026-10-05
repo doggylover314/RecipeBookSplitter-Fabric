@@ -117,10 +117,11 @@ Example log line from a test server with 4,457 recipes:
 - **Measuring is not free.** Every recipe book add with two or more entries is encoded one extra time in full (entry by
   entry) to measure it, on the Netty event loop thread of that connection, in addition to the normal encode of the
   packet or its chunks. Other connections on the same event loop thread wait while that runs. The split log line shows
-  the time: between 0.13 and 0.44 s for the 9.2 MB book in the end-to-end runs on a small test VM
+  the time: between 0.13 and 0.46 s for the 9.2 MB book in the end-to-end runs on a small test VM
   (the kit runs with the debug digest on, which also hashes the entry bytes). It happens when a player with a big
-  recipe book joins, on `/reload`, and when many recipes are unlocked at once (`/recipe give`). Small packets take microseconds. The server thread is not
-  blocked by it, and the stall is far below the keep-alive timeouts, but expect a short hitch for the players that
+  recipe book joins, on `/reload`, when Polymer resends the recipe book after a player changes their client language,
+  and when many recipes are unlocked at once (`/recipe give`). Small packets take microseconds. The server thread is
+  not blocked by it, and the stall is far below the keep-alive timeouts, but expect a short hitch for the players that
   share the thread.
 - The client rebuilds its recipe book once per chunk, so a 9 MB recipe book costs the client about nine rebuilds
   instead of one. By reading the client code, each rebuild also starts a new background build of the recipe search
