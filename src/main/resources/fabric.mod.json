@@ -5,7 +5,6 @@
   "name": "Recipe Book Splitter",
   "description": "Server-side mod that splits oversized recipe book packets into several smaller ones, so players who know thousands of recipes are not disconnected (vanilla 8 MiB / 2 MiB packet limits, Velocity).",
   "authors": [],
-  "license": "MIT",
   "environment": "server",
   "entrypoints": {
     "server": [

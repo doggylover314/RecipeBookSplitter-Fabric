@@ -29,7 +29,7 @@ network access for the downloads. Ports 25565 (server) and 25577 (Velocity) must
 
 Every mod scenario has two phases, each with its own login: phase 1 joins and then runs `recipe give Tester *`
 (a `replace=false` packet with all recipes); phase 2 relogs (the initial recipe book, `replace=true`, with all
-recipes). "Mods" always include Fabric API 0.141.6.
+recipes. Fabric API 0.141.6 is loaded in every scenario except E3b.
 
 | ID | Mods | Network compression of the server | What is expected |
 |---|---|---|---|
@@ -38,6 +38,7 @@ recipes). "Mods" always include Fabric API 0.141.6.
 | E1 | Polymer + Recipe Book Splitter | 256 | No disconnect; every digest matches one client sequence of 9 packets; `replace` only on the first; every packet at most 1 MiB; split log lines |
 | E2 | as E1 | off | as E1; no frame over 2,097,151 bytes |
 | E3 | Recipe Book Splitter, no Polymer | 256 | as E1 |
+| E3b | Recipe Book Splitter alone: no Fabric API, no Polymer | 256 | as E1 |
 | E4 | as E1 | 256 | as E1, plus a third phase: relog, then `/reload` while connected; the reload resends the recipe book (`replace=true`) in chunks too |
 | E5 | as E1, plus one 4.5 MB recipe, `logOversizedPackets` on | 256 | as E1, plus a WARN for the entry that is bigger than the budget on its own and a WARN for the oversized packet. Synthetic: a real client rejects item NBT over 2 MiB, this client does not |
 | E6 | as E1 + FabricProxy-Lite 2.11.0, behind Velocity 4.2.0 (modern forwarding) | 256 | as E1, with the client connected to Velocity |
@@ -85,7 +86,7 @@ Everything for a scenario is in `e2e/work/<scenario>/`:
 
 ## Status
 
-All scenarios in the table were run against the 1.0.0 jar on Linux with JDK 21 for the server and a Temurin 25 JRE for
+All scenarios in the table were run against the 1.0.0 jar (the ones with the mod again after the code review fixes) on Linux with JDK 21 for the server and a Temurin 25 JRE for
 Velocity, and all assertions passed. In particular the baselines reproduce the failures (E0: `Packet too big (is
 9227553, should be less than 8388608)`, E0b: `Packet too large: size 9227553 is over 8`), and with the mod the same
 9,227,553-byte packet arrives as 9 packets of at most 1,048,576 bytes each, and their entry bytes hash to the digest the server logged.

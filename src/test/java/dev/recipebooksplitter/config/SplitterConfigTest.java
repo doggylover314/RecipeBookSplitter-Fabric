@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.JsonParseException;
+import dev.recipebooksplitter.RecipeBookSplitter;
+import dev.recipebooksplitter.testutil.LogCapture;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.apache.logging.log4j.Level;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
@@ -119,6 +122,26 @@ class SplitterConfigTest {
     void unknownKeysAreIgnored() throws IOException {
         SplitterConfig loaded = loadFile("{\"maxChunkBytes\": 300000, \"maxChunkByte\": 5, \"logOversizedPackets\": true}");
         assertEquals(new SplitterConfig(300_000, true, true), loaded);
+    }
+
+    /** Some Windows editors write a UTF-8 byte order mark; Gson skips it. */
+    @Test
+    void byteOrderMarkIsIgnored() throws IOException {
+        assertEquals(new SplitterConfig(300_000, false, true),
+                loadFile("\uFEFF{\"maxChunkBytes\": 300000, \"logSplits\": false, \"logOversizedPackets\": true}"));
+    }
+
+    @Test
+    void everyMissingKeyIsLoggedAtInfo() {
+        try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            SplitterConfig.parse("{}", RecipeBookSplitter.LOGGER);
+
+            assertEquals(3, log.entries().size());
+            assertEquals(3, log.messages(Level.INFO).size());
+            for (String key : new String[] {"maxChunkBytes", "logSplits", "logOversizedPackets"}) {
+                assertTrue(log.messages(Level.INFO).stream().anyMatch(message -> message.contains("'" + key + "' missing")), key);
+            }
+        }
     }
 
     @Test

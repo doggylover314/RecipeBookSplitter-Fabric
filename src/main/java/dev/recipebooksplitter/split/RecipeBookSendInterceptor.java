@@ -9,6 +9,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.EventLoop;
+import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -26,8 +27,9 @@ import org.slf4j.Logger;
  *
  * <p>Running on the event loop keeps the ordering of vanilla's own send path: {@code Connection.sendPacket} also hands
  * packets from other threads to the event loop, so our task takes the place the original packet's write task would have
- * had. All chunks are then written back to back inside that one task, so nothing can end up between them, and the extra
- * encoding work for measuring stays off the server thread.
+ * had. All chunks are then written back to back inside that one task, so nothing can end up between them. The price is
+ * that measuring (about one extra encode of the whole packet) runs on that event loop thread, which other connections
+ * share; it is kept off the server thread.
  */
 public final class RecipeBookSendInterceptor {
     /** Set to {@code true} to log a SHA-256 digest of the entry bytes of every measured packet (used by the e2e kit). */
@@ -37,55 +39,63 @@ public final class RecipeBookSendInterceptor {
 
     private static final Logger LOGGER = RecipeBookSplitter.LOGGER;
     private static final boolean DEBUG_DIGEST = Boolean.getBoolean(DEBUG_DIGEST_PROPERTY);
-    /** True while this thread writes our chunks, so they pass through the hook instead of being split again. */
-    private static final ThreadLocal<Boolean> SENDING_CHUNKS = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    private static final AtomicBoolean WARNED_NO_ENCODER = new AtomicBoolean();
+    /**
+     * The packet {@link #write} is sending on this thread right now. Only that exact object passes the hook unsplit.
+     * A plain flag would also let any other recipe packet through that is sent while we write, for example from a send
+     * listener to a player whose connection runs on the same event loop.
+     */
+    private static final ThreadLocal<ClientboundRecipeBookAddPacket> RESENDING = new ThreadLocal<>();
+    /** Package-private so tests can reset it. */
+    static final AtomicBoolean WARNED_NO_ENCODER = new AtomicBoolean();
 
     private RecipeBookSendInterceptor() {}
 
     /**
      * @return true if the packet was taken over (the caller must cancel the original send), false to let vanilla
-     *         send it. Never throws.
+     *         send it. Never throws: whatever goes wrong before the work is scheduled leaves the packet to vanilla.
      */
     public static boolean onSend(Connection connection, ClientboundRecipeBookAddPacket packet,
                                  @Nullable ChannelFutureListener listener, boolean flush) {
-        // Nothing to split with fewer than two entries; this also keeps the common case free of any other work.
-        if (packet.entries().size() < 2 || SENDING_CHUNKS.get()) {
-            return false;
-        }
-        Channel channel;
         try {
+            // Nothing to split with fewer than two entries; this also keeps the common case free of any other work.
+            if (packet.entries().size() < 2 || packet == RESENDING.get()) {
+                return false;
+            }
             // For a connection that is not open, vanilla only queues the packet (a server connection never reopens),
             // so there is nothing to write chunks to.
             if (!connection.isConnected()) {
                 return false;
             }
-            channel = ((ConnectionAccessor) connection).recipebooksplitter$getChannel();
-        } catch (Throwable t) {
-            LOGGER.debug("[RecipeBookSplitter] could not access the channel, leaving the packet to vanilla", t);
-            return false;
-        }
-        EventLoop loop = channel.eventLoop();
-        if (loop.inEventLoop()) {
-            splitAndWrite(connection, channel, packet, listener, flush);
-            return true;
-        }
-        try {
-            loop.execute(() -> splitAndWrite(connection, channel, packet, listener, flush));
+            Channel channel = ((ConnectionAccessor) connection).recipebooksplitter$getChannel();
+            EventLoop loop = channel.eventLoop();
+            if (loop.inEventLoop()) {
+                splitAndWrite(connection, channel, packet, listener, flush);
+            } else {
+                loop.execute(() -> splitAndWrite(connection, channel, packet, listener, flush));
+            }
             return true;
         } catch (RejectedExecutionException e) {
             // The event loop is shutting down; behave exactly like vanilla.
             return false;
+        } catch (Throwable t) {
+            LOGGER.debug("[RecipeBookSplitter] could not take over a recipe book packet, leaving it to vanilla", t);
+            return false;
         }
     }
 
-    static boolean isSendingChunks() {
-        return SENDING_CHUNKS.get();
+    /** The packet being re-sent on this thread, if any; for tests. */
+    static @Nullable ClientboundRecipeBookAddPacket currentlyResent() {
+        return RESENDING.get();
     }
 
     /** Runs on the event loop. Never throws; if anything fails the original packet is sent unsplit. */
     static void splitAndWrite(Connection connection, Channel channel, ClientboundRecipeBookAddPacket packet,
                               @Nullable ChannelFutureListener listener, boolean flush) {
+        if (!channel.isOpen()) {
+            // The client went away while the task was queued: don't measure for nobody, let vanilla deal with it.
+            write(connection, List.of(packet), listener, flush);
+            return;
+        }
         long start = System.nanoTime();
         SplitterConfig config = RecipeBookSplitter.config();
         List<ClientboundRecipeBookAddPacket> toSend = List.of(packet);
@@ -94,7 +104,9 @@ public final class RecipeBookSendInterceptor {
         try {
             ChannelHandlerContext ctx = channel.pipeline().context(HandlerNames.ENCODER);
             if (ctx == null || !(ctx.handler() instanceof PacketEncoder<?> encoder)) {
-                if (WARNED_NO_ENCODER.compareAndSet(false, true)) {
+                // Fake players (e.g. Carpet's) sit on an EmbeddedChannel without an encoder and never write to a
+                // network, so only a real channel without an encoder is worth a warning.
+                if (!(channel instanceof EmbeddedChannel) && WARNED_NO_ENCODER.compareAndSet(false, true)) {
                     LOGGER.warn("[RecipeBookSplitter] {}: no PacketEncoder named '{}' in the pipeline; sending recipe book packet unsplit (further occurrences logged at DEBUG)",
                             describe(connection), HandlerNames.ENCODER);
                 } else {
@@ -119,7 +131,11 @@ public final class RecipeBookSendInterceptor {
         write(connection, toSend, listener, flush);
 
         if (measurement != null) {
-            report(connection, packet, measurement, plan, config, tookMs);
+            try {
+                report(connection, packet, measurement, plan, config, tookMs);
+            } catch (Throwable t) {
+                LOGGER.error("[RecipeBookSplitter] {}: could not log the recipe book packet details", describe(connection), t);
+            }
         }
     }
 
@@ -130,17 +146,17 @@ public final class RecipeBookSendInterceptor {
      */
     private static void write(Connection connection, List<ClientboundRecipeBookAddPacket> packets,
                               @Nullable ChannelFutureListener listener, boolean flush) {
-        boolean previous = SENDING_CHUNKS.get();
-        SENDING_CHUNKS.set(Boolean.TRUE);
+        ClientboundRecipeBookAddPacket outer = RESENDING.get();
         try {
             int last = packets.size() - 1;
             for (int i = 0; i <= last; i++) {
+                RESENDING.set(packets.get(i));
                 connection.send(packets.get(i), i == last ? listener : null, i == last && flush);
             }
         } catch (Throwable t) {
             LOGGER.error("[RecipeBookSplitter] {}: error while sending recipe book packet(s)", describe(connection), t);
         } finally {
-            SENDING_CHUNKS.set(previous);
+            RESENDING.set(outer);
         }
     }
 

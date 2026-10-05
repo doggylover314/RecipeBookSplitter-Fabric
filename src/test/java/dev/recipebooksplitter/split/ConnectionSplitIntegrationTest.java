@@ -9,36 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.recipebooksplitter.RecipeBookSplitter;
 import dev.recipebooksplitter.config.SplitterConfig;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOutboundHandlerAdapter;
-import io.netty.channel.ChannelPromise;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.channel.local.LocalAddress;
-import io.netty.channel.local.LocalChannel;
-import io.netty.channel.local.LocalIoHandler;
-import io.netty.channel.local.LocalServerChannel;
-import io.netty.util.ReferenceCountUtil;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 import net.minecraft.network.Connection;
-import net.minecraft.network.HandlerNames;
 import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.configuration.ConfigurationProtocols;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket.Entry;
@@ -56,23 +37,10 @@ import org.junit.jupiter.api.Test;
 class ConnectionSplitIntegrationTest {
     private static final int BUDGET = 65_536;
 
-    /** Sits in front of the encoder and records what the connection writes, and whether our send guard was active. */
-    private static final class Recorder extends ChannelOutboundHandlerAdapter {
-        // Written on the event loop, read by the test thread.
-        final List<Object> messages = new CopyOnWriteArrayList<>();
-        final List<Boolean> guardActive = new CopyOnWriteArrayList<>();
-
-        @Override
-        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-            messages.add(msg);
-            guardActive.add(RecipeBookSendInterceptor.isSendingChunks());
-            ctx.write(msg, promise);
-        }
-    }
-
+    private TestConnection test;
     private Connection connection;
     private EmbeddedChannel channel;
-    private Recorder recorder;
+    private WriteRecorder recorder;
 
     @BeforeAll
     static void bootstrap() {
@@ -82,20 +50,16 @@ class ConnectionSplitIntegrationTest {
     @BeforeEach
     void setUp() throws Exception {
         RecipeBookSplitter.setConfig(new SplitterConfig(BUDGET, true, true));
-        recorder = new Recorder();
-        connection = new Connection(PacketFlow.SERVERBOUND);
-        channel = new EmbeddedChannel(false, false);
-        // Outbound packets travel packet_handler -> recorder -> encoder.
-        channel.pipeline().addLast(HandlerNames.ENCODER, new PacketEncoder<>(RecipeFixtures.protocol()));
-        channel.pipeline().addLast("recorder", recorder);
-        channel.pipeline().addLast(HandlerNames.PACKET_HANDLER, connection);
-        channel.register();
+        test = TestConnection.create(new PacketEncoder<>(RecipeFixtures.protocol()));
+        connection = test.connection();
+        channel = test.channel();
+        recorder = test.recorder();
         assertTrue(connection.isConnected());
     }
 
     @AfterEach
     void tearDown() {
-        channel.finishAndReleaseAll();
+        test.close();
         RecipeBookSplitter.setConfig(SplitterConfig.DEFAULTS);
     }
 
@@ -146,11 +110,19 @@ class ConnectionSplitIntegrationTest {
         assertEquals(1, listenerCalls.get());
         assertTrue(completed.get().isSuccess());
 
-        // The connection only ever saw our chunk objects, each written while the recursion guard was set.
+        // The connection only ever saw our chunk objects, each written while it was the packet being re-sent.
         assertEquals(chunks.size(), recorder.messages.size());
-        assertTrue(recorder.messages.stream().allMatch(ClientboundRecipeBookAddPacket.class::isInstance));
-        assertTrue(recorder.guardActive.stream().allMatch(Boolean::booleanValue));
-        assertFalse(RecipeBookSendInterceptor.isSendingChunks());
+        for (int i = 0; i < chunks.size(); i++) {
+            assertTrue(recorder.messages.get(i) instanceof ClientboundRecipeBookAddPacket);
+            assertSame(recorder.messages.get(i), recorder.resent.get(i), "write " + i);
+        }
+        assertNull(RecipeBookSendInterceptor.currentlyResent());
+
+        // The listener belongs to the last chunk only, so it completes when the whole book has been written.
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertFalse(recorder.withListener.get(i), "chunk " + i + " must not carry the listener");
+        }
+        assertTrue(recorder.withListener.get(chunks.size() - 1), "the last chunk carries the listener");
     }
 
     @Test
@@ -163,6 +135,7 @@ class ConnectionSplitIntegrationTest {
         List<ClientboundRecipeBookAddPacket> chunks = addPackets(readFrames(channel));
         assertTrue(chunks.size() > 1);
         assertTrue(chunks.stream().noneMatch(ClientboundRecipeBookAddPacket::replace));
+        assertTrue(recorder.withListener.stream().noneMatch(Boolean::booleanValue), "no listener, so no chunk has a promise of its own");
         assertSameEntries(entries, chunks);
     }
 
@@ -193,6 +166,7 @@ class ConnectionSplitIntegrationTest {
 
         assertEquals(1, recorder.messages.size());
         assertSame(original, recorder.messages.get(0));
+        assertSame(original, recorder.resent.get(0), "the unsplit original goes through the same guard");
         assertEquals(1, channel.outboundMessages().size());
     }
 
@@ -205,57 +179,46 @@ class ConnectionSplitIntegrationTest {
 
         for (Packet<?> packet : packets) {
             recorder.messages.clear();
-            recorder.guardActive.clear();
+            recorder.resent.clear();
 
             connection.send(packet);
             channel.runPendingTasks();
 
             assertEquals(1, recorder.messages.size(), packet.type().toString());
             assertSame(packet, recorder.messages.get(0));
-            assertFalse(recorder.guardActive.get(0), "the vanilla path does not go through our chunk writer");
+            assertNull(recorder.resent.get(0), "the vanilla path does not go through our chunk writer");
         }
     }
 
     @Test
     void noEncoderFallsBack() throws Exception {
-        EmbeddedChannel bare = new EmbeddedChannel(false, false);
-        Recorder bareRecorder = new Recorder();
-        Connection bareConnection = new Connection(PacketFlow.SERVERBOUND);
-        bare.pipeline().addLast("recorder", bareRecorder);
-        bare.pipeline().addLast(HandlerNames.PACKET_HANDLER, bareConnection);
-        bare.register();
-        ClientboundRecipeBookAddPacket original = new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true);
+        try (TestConnection bare = TestConnection.create(null)) {
+            ClientboundRecipeBookAddPacket original = new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true);
 
-        bareConnection.send(original);
-        bare.runPendingTasks();
+            bare.connection().send(original);
+            bare.channel().runPendingTasks();
 
-        assertEquals(1, bareRecorder.messages.size());
-        assertSame(original, bareRecorder.messages.get(0));
-        assertSame(original, bare.readOutbound());
-        assertNull(bare.readOutbound());
-        bare.finishAndReleaseAll();
+            assertEquals(1, bare.recorder().messages.size());
+            assertSame(original, bare.recorder().messages.get(0));
+            assertSame(original, bare.channel().readOutbound());
+            assertNull(bare.channel().readOutbound());
+        }
     }
 
     @Test
     void measurementFailureFallsBack() throws Exception {
         // A configuration-phase encoder cannot encode play packets, so sizing fails with "Sending unknown packet".
-        EmbeddedChannel wrongPhase = new EmbeddedChannel(false, false);
-        Recorder wrongRecorder = new Recorder();
-        Connection wrongConnection = new Connection(PacketFlow.SERVERBOUND);
-        wrongPhase.pipeline().addLast(HandlerNames.ENCODER, new PacketEncoder<>(ConfigurationProtocols.CLIENTBOUND));
-        wrongPhase.pipeline().addLast("recorder", wrongRecorder);
-        wrongPhase.pipeline().addLast(HandlerNames.PACKET_HANDLER, wrongConnection);
-        wrongPhase.register();
-        ClientboundRecipeBookAddPacket original = new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(10), true);
+        try (TestConnection wrongPhase = TestConnection.create(new PacketEncoder<>(ConfigurationProtocols.CLIENTBOUND))) {
+            ClientboundRecipeBookAddPacket original = new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(10), true);
 
-        wrongConnection.send(original);
-        wrongPhase.runPendingTasks();
+            wrongPhase.connection().send(original);
+            wrongPhase.channel().runPendingTasks();
 
-        // The original is sent once, unsplit. (It then fails in the encoder as it would without the mod.)
-        List<Object> sentAddPackets = wrongRecorder.messages.stream().filter(ClientboundRecipeBookAddPacket.class::isInstance).toList();
-        assertEquals(1, sentAddPackets.size());
-        assertSame(original, sentAddPackets.get(0));
-        wrongPhase.finishAndReleaseAll();
+            // The original is sent once, unsplit. (It then fails in the encoder as it would without the mod.)
+            List<Object> sentAddPackets = wrongPhase.recorder().messages.stream().filter(ClientboundRecipeBookAddPacket.class::isInstance).toList();
+            assertEquals(1, sentAddPackets.size());
+            assertSame(original, sentAddPackets.get(0));
+        }
     }
 
     /**
@@ -264,47 +227,17 @@ class ConnectionSplitIntegrationTest {
      */
     @Test
     void chunksStayContiguousWhenSentFromAnotherThread() throws Exception {
-        MultiThreadIoEventLoopGroup group = new MultiThreadIoEventLoopGroup(1, LocalIoHandler.newFactory());
-        try {
-            Connection serverConnection = new Connection(PacketFlow.SERVERBOUND);
-            Recorder serverRecorder = new Recorder();
-            LocalAddress address = new LocalAddress("recipebooksplitter-" + System.nanoTime());
-
-            new ServerBootstrap()
-                    .group(group)
-                    .channel(LocalServerChannel.class)
-                    .childHandler(new ChannelInitializer<LocalChannel>() {
-                        @Override
-                        protected void initChannel(LocalChannel child) {
-                            child.pipeline().addLast(HandlerNames.ENCODER, new PacketEncoder<>(RecipeFixtures.protocol()));
-                            child.pipeline().addLast("recorder", serverRecorder);
-                            child.pipeline().addLast(HandlerNames.PACKET_HANDLER, serverConnection);
-                        }
-                    })
-                    .bind(address).sync();
-            Channel client = new Bootstrap()
-                    .group(group)
-                    .channel(LocalChannel.class)
-                    .handler(new ChannelInboundHandlerAdapter() {
-                        @Override
-                        public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                            ReferenceCountUtil.release(msg);
-                        }
-                    })
-                    .connect(address).sync().channel();
-
-            awaitUntil(serverConnection::isConnected, "connection did not become active");
-
+        try (LocalConnection local = new LocalConnection(true)) {
             List<Entry> entries = RecipeFixtures.entries(400);
             ClientboundRecipeBookRemovePacket before = new ClientboundRecipeBookRemovePacket(List.of(new RecipeDisplayId(1)));
             ClientboundRecipeBookRemovePacket after = new ClientboundRecipeBookRemovePacket(List.of(new RecipeDisplayId(2)));
-            serverConnection.send(before);
-            serverConnection.send(new ClientboundRecipeBookAddPacket(entries, true));
-            serverConnection.send(after);
+            local.connection.send(before);
+            local.connection.send(new ClientboundRecipeBookAddPacket(entries, true));
+            local.connection.send(after);
 
-            awaitUntil(() -> serverRecorder.messages.contains(after), "the last packet was never written");
+            LocalConnection.awaitUntil(() -> local.recorder.messages.contains(after), "the last packet was never written");
 
-            List<Object> written = serverRecorder.messages;
+            List<Object> written = local.recorder.messages;
             assertSame(before, written.get(0));
             assertSame(after, written.get(written.size() - 1));
             List<ClientboundRecipeBookAddPacket> chunks = written.subList(1, written.size() - 1).stream()
@@ -313,18 +246,9 @@ class ConnectionSplitIntegrationTest {
             assertTrue(chunks.get(0).replace());
             assertTrue(chunks.stream().skip(1).noneMatch(ClientboundRecipeBookAddPacket::replace));
             assertSameEntries(entries, chunks);
-            assertTrue(serverRecorder.guardActive.subList(1, written.size() - 1).stream().allMatch(Boolean::booleanValue));
-            client.close().sync();
-        } finally {
-            group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
-        }
-    }
-
-    private static void awaitUntil(BooleanSupplier condition, String failureMessage) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (!condition.getAsBoolean()) {
-            assertTrue(System.nanoTime() < deadline, failureMessage);
-            Thread.sleep(5);
+            for (int i = 1; i < written.size() - 1; i++) {
+                assertSame(written.get(i), local.recorder.resent.get(i), "write " + i);
+            }
         }
     }
 }

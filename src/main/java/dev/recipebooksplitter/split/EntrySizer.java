@@ -49,6 +49,12 @@ public final class EntrySizer {
     /**
      * Assumes an entry's bytes do not depend on its neighbours, so the packet size is the sum of the entry sizes
      * plus the fixed overhead; the tests check that this equals a full encode.
+     *
+     * <p>The probes run the real {@code PacketEncoder.encode}. Other mods keep per-thread state for the duration of one
+     * encode (packet-tweaker, and with it Polymer, clears its packet context when an encode returns; Fabric API resets
+     * its custom ingredient state), so a probe run from inside another encode on the same thread would wipe that state
+     * for the outer packet. That needs a recipe packet to be sent from within an encode, which a vanilla nested write
+     * would break in the same way, and nothing in the tested stack does it.
      */
     public static Measurement measure(List<ClientboundRecipeBookAddPacket.Entry> entries, PacketWriter writer,
                                       boolean computeSha256) throws Exception {
@@ -60,13 +66,16 @@ public final class EntrySizer {
             // Empty packet: id + VarInt(0) + replace flag.
             int empty = encodedSize(writer, scratch, new ClientboundRecipeBookAddPacket(List.of(), false));
             int fixedOverhead = empty - 1;
+            // In a one-entry packet the entry follows the id and the 1-byte count. That is the same number as the
+            // fixed overhead (id plus the 1-byte replace flag), but for a different reason.
+            int entryOffset = empty - 1;
             int[] sizes = new int[entries.size()];
             for (int i = 0; i < sizes.length; i++) {
                 // One-entry packet: id + VarInt(1) + entry + replace flag; both counts take one byte.
                 int probe = encodedSize(writer, scratch, new ClientboundRecipeBookAddPacket(List.of(entries.get(i)), false));
                 sizes[i] = probe - empty;
                 if (digest != null) {
-                    digest.update(scratch.nioBuffer(fixedOverhead, sizes[i]));
+                    digest.update(scratch.nioBuffer(entryOffset, sizes[i]));
                 }
             }
             return new Measurement(fixedOverhead, sizes, digest == null ? null : HexFormat.of().formatHex(digest.digest()));

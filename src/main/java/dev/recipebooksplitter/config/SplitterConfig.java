@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 /**
@@ -87,14 +88,22 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
             }
         }
         return new SplitterConfig(
-                parseMaxChunkBytes(object.get(KEY_MAX_CHUNK_BYTES), log),
+                parseMaxChunkBytes(value(object, KEY_MAX_CHUNK_BYTES, DEFAULT_MAX_CHUNK_BYTES, log), log),
                 parseBoolean(object, KEY_LOG_SPLITS, DEFAULTS.logSplits(), log),
                 parseBoolean(object, KEY_LOG_OVERSIZED_PACKETS, DEFAULTS.logOversizedPackets(), log));
     }
 
-    private static int parseMaxChunkBytes(JsonElement element, Logger log) {
+    /** The value of a key, or null (logged at INFO, the same for every key) if it is missing. */
+    private static @Nullable JsonElement value(JsonObject object, String key, Object fallback, Logger log) {
+        JsonElement element = object.get(key);
         if (element == null) {
-            log.info("[RecipeBookSplitter] '{}' missing, using default {}", KEY_MAX_CHUNK_BYTES, DEFAULT_MAX_CHUNK_BYTES);
+            log.info("[RecipeBookSplitter] '{}' missing, using default {}", key, fallback);
+        }
+        return element;
+    }
+
+    private static int parseMaxChunkBytes(@Nullable JsonElement element, Logger log) {
+        if (element == null) {
             return DEFAULT_MAX_CHUNK_BYTES;
         }
         if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber()) {
@@ -122,7 +131,7 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
     }
 
     private static boolean parseBoolean(JsonObject object, String key, boolean fallback, Logger log) {
-        JsonElement element = object.get(key);
+        JsonElement element = value(object, key, fallback, log);
         if (element == null) {
             return fallback;
         }

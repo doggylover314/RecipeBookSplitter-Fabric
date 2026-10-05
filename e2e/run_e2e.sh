@@ -2,7 +2,7 @@
 # End-to-end scenarios for RecipeBookSplitter: a real Fabric server with a data pack that makes the recipe book packet
 # larger than the 8 MiB limit, and a minimal protocol client that records what arrives. See e2e/README.md.
 #
-#   ACCEPT_EULA=true e2e/run_e2e.sh <scenario>...     scenarios: E0 E0b E1 E2 E3 E4 E5 E6 E6b E6x E7a E7b E7c, or "all"
+#   ACCEPT_EULA=true e2e/run_e2e.sh <scenario>...     scenarios: E0 E0b E1 E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c, or "all"
 #
 # The mod jar is taken from build/libs (run ./gradlew build first) unless RBS_JAR points at one.
 # Other environment variables: JAVA (backend server, default "java"), VELOCITY_JAVA (Java 25+, downloaded if unset
@@ -16,7 +16,7 @@ export E2E_CACHE=${E2E_CACHE:-$E2E_WORK/cache}
 JAVA=${JAVA:-java}
 BACKEND_PORT=${E2E_BACKEND_PORT:-25565}
 PROXY_PORT=${E2E_PROXY_PORT:-25577}
-ALL_SCENARIOS=(E0 E0b E1 E2 E3 E4 E5 E6 E6b E6x E7a E7b E7c)
+ALL_SCENARIOS=(E0 E0b E1 E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c)
 
 FABRIC_API=fabric-api-0.141.6+1.21.11.jar
 POLYMER=polymer-bundled-0.15.2+1.21.11.jar
@@ -27,7 +27,7 @@ LOGIN_RE='Tester\[.*\] logged in'
 # Sets the scenario variables. Defaults: the mod with Fabric API + Polymer, backend compression 256, two phases
 # (join + /recipe give, then relog).
 define_scenario() {
-  DESC=; KIND=split; RBS=1; POLYMER_MOD=1; PROXY=0; COMP=256; CFG=default; LOG_OVERSIZED=false
+  DESC=; KIND=split; RBS=1; FABRIC_API_MOD=1; POLYMER_MOD=1; PROXY=0; COMP=256; CFG=default; LOG_OVERSIZED=false
   HUGE=0; MAX_CHUNK=1048576; PHASES=2; CONFIG_CHECK=none
   case $1 in
     E0)  DESC="baseline: no mod, compression 256"; KIND=baseline; RBS=0 ;;
@@ -35,6 +35,7 @@ define_scenario() {
     E1)  DESC="mod + Fabric API + Polymer, compression 256" ;;
     E2)  DESC="mod + Fabric API + Polymer, compression off"; COMP=-1 ;;
     E3)  DESC="mod + Fabric API, no Polymer, compression 256"; POLYMER_MOD=0 ;;
+    E3b) DESC="mod alone: no Fabric API, no Polymer, compression 256"; FABRIC_API_MOD=0; POLYMER_MOD=0 ;;
     E4)  DESC="E1 plus /reload with the client connected"; PHASES=3 ;;
     E5)  DESC="E1 plus one 4.5 MB recipe entry (synthetic), logOversizedPackets"; HUGE=4500000; LOG_OVERSIZED=true ;;
     E6)  DESC="E1 behind Velocity (modern forwarding, FabricProxy-Lite), backend compression 256"; PROXY=1 ;;
@@ -188,7 +189,7 @@ run_scenario() {
   cp -al "$E2E_CACHE/server-template/." "$S/" 2>/dev/null || cp -a "$E2E_CACHE/server-template/." "$S/"
   rm -rf "$S/logs"
   mkdir -p "$S/mods" "$S/config" "$S/world/datapacks"
-  cp "$E2E_CACHE/$FABRIC_API" "$S/mods/"
+  [ "$FABRIC_API_MOD" = 1 ] && cp "$E2E_CACHE/$FABRIC_API" "$S/mods/"
   [ "$POLYMER_MOD" = 1 ] && cp "$E2E_CACHE/$POLYMER" "$S/mods/"
   [ "$PROXY" = 1 ] && cp "$E2E_CACHE/$FPL" "$S/mods/"
   [ -n "$jar" ] && cp "$jar" "$S/mods/"
@@ -215,14 +216,14 @@ PROPS
   [ "$HUGE" -gt 0 ] && datapack_args+=(--huge-entry-bytes "$HUGE")
   python3 "$E/gen_datapack.py" "${datapack_args[@]}" > /dev/null || die "data pack generation failed"
 
-  NAME=$NAME DESC=$DESC KIND=$KIND RBS=$RBS POLYMER_MOD=$POLYMER_MOD PROXY=$PROXY COMP=$COMP MAX_CHUNK=$MAX_CHUNK \
+  NAME=$NAME DESC=$DESC KIND=$KIND RBS=$RBS FABRIC_API_MOD=$FABRIC_API_MOD POLYMER_MOD=$POLYMER_MOD PROXY=$PROXY COMP=$COMP MAX_CHUNK=$MAX_CHUNK \
     PHASES=$PHASES HUGE=$HUGE LOG_OVERSIZED=$LOG_OVERSIZED CONFIG_CHECK=$CONFIG_CHECK \
     python3 -c '
 import json, os
 env = os.environ
 print(json.dumps({
     "name": env["NAME"], "description": env["DESC"], "kind": env["KIND"], "rbs": env["RBS"] == "1",
-    "polymer": env["POLYMER_MOD"] == "1", "proxy": env["PROXY"] == "1", "compression": int(env["COMP"]),
+    "fabric_api": env["FABRIC_API_MOD"] == "1", "polymer": env["POLYMER_MOD"] == "1", "proxy": env["PROXY"] == "1", "compression": int(env["COMP"]),
     "max_chunk_bytes": int(env["MAX_CHUNK"]), "phases": int(env["PHASES"]), "huge_entry_bytes": int(env["HUGE"]),
     "log_oversized": env["LOG_OVERSIZED"] == "true", "config_check": env["CONFIG_CHECK"],
 }, indent=2))' > "$W/scenario.json"
