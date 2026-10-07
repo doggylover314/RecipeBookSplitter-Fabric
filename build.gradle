@@ -29,9 +29,25 @@ dependencies {
 }
 
 tasks.named('test', Test) {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // EncodeOnceBenchmarkTest is opt-in: ./gradlew test -PrbsBench --tests '*EncodeOnceBenchmarkTest' --no-daemon
+        if (!project.hasProperty('rbsBench')) {
+            excludeTags 'benchmark'
+        }
+    }
     // fabric-loader-junit defaults to the client side; the mod is "environment": "server", so its mixins would not load.
     systemProperty 'fabric.side', 'server'
+    if (project.hasProperty('rbsBench')) {
+        // The benchmark builds a 9 MB book several times and prints its results to the console.
+        maxHeapSize = '3g'
+        outputs.upToDateWhen { false }
+        testLogging.showStandardStreams = true
+        ['rbsBench.rounds', 'rbsBench.warmup', 'rbsBench.datasets'].each { key ->
+            if (project.hasProperty(key)) {
+                systemProperty key, project.property(key)
+            }
+        }
+    }
     testLogging {
         exceptionFormat = 'full'
         events 'passed', 'skipped', 'failed'

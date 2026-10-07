@@ -1,6 +1,7 @@
 package dev.recipebooksplitter;
 
 import dev.recipebooksplitter.config.SplitterConfig;
+import dev.recipebooksplitter.split.RecipeBookSendInterceptor;
 import dev.recipebooksplitter.util.Sizes;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -31,5 +32,6 @@ public class RecipeBookSplitter implements DedicatedServerModInitializer {
         SplitterConfig loaded = config();
         LOGGER.info("[RecipeBookSplitter] loaded: maxChunkBytes={} ({}), logSplits={}, logOversizedPackets={}",
                 Sizes.bytes(loaded.maxChunkBytes()), Sizes.mib(loaded.maxChunkBytes()), loaded.logSplits(), loaded.logOversizedPackets());
+        RecipeBookSendInterceptor.logStartup();
     }
 }

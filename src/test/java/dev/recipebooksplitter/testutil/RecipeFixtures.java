@@ -8,6 +8,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Random;
 import java.util.stream.IntStream;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.RegistryAccess;
@@ -96,9 +97,23 @@ public final class RecipeFixtures {
      * @param padBytes size of an opaque custom_data payload on the result item, to give entries a controllable size
      */
     public static ClientboundRecipeBookAddPacket.Entry entry(int displayId, int padBytes, byte flags) {
-        ItemStack result = new ItemStack(Items.PAPER);
         CompoundTag tag = new CompoundTag();
         tag.putByteArray("pad", new byte[padBytes]);
+        return entryWithCustomData(displayId, tag, flags);
+    }
+
+    /** Like {@link #entry}, but the pad is random bytes (the same for the same id), which DEFLATE cannot compress. */
+    public static ClientboundRecipeBookAddPacket.Entry incompressibleEntry(int displayId, int padBytes, byte flags) {
+        byte[] pad = new byte[padBytes];
+        new Random(displayId).nextBytes(pad);
+        CompoundTag tag = new CompoundTag();
+        tag.putByteArray("pad", pad);
+        return entryWithCustomData(displayId, tag, flags);
+    }
+
+    /** An entry whose result item carries {@code tag} as custom_data. */
+    public static ClientboundRecipeBookAddPacket.Entry entryWithCustomData(int displayId, CompoundTag tag, byte flags) {
+        ItemStack result = new ItemStack(Items.PAPER);
         result.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
 
         var display = new ShapelessCraftingRecipeDisplay(

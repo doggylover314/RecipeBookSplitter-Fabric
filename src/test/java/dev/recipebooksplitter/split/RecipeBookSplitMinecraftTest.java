@@ -1,8 +1,10 @@
 package dev.recipebooksplitter.split;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +12,7 @@ import dev.recipebooksplitter.split.ChunkPlanner.Chunk;
 import dev.recipebooksplitter.testutil.FakeClientRecipeBook;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -17,6 +20,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.IntStream;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.VarInt;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
@@ -41,7 +45,7 @@ class RecipeBookSplitMinecraftTest {
     }
 
     private static EntrySizer.Measurement measure(List<Entry> entries) throws Exception {
-        return EntrySizer.measure(entries, RecipeFixtures.writer(), false);
+        return EntrySizer.measure(entries, RecipeFixtures.writer(), false, false);
     }
 
     private static List<Entry> pads(int... padBytes) {
@@ -92,7 +96,7 @@ class RecipeBookSplitMinecraftTest {
             buf.release();
         }
 
-        EntrySizer.Measurement measurement = EntrySizer.measure(entries, RecipeFixtures.writer(), true);
+        EntrySizer.Measurement measurement = EntrySizer.measure(entries, RecipeFixtures.writer(), true, false);
 
         assertEquals(HexFormat.of().formatHex(expected.digest()), measurement.sha256());
         assertNull(measure(entries).sha256());
@@ -107,7 +111,7 @@ class RecipeBookSplitMinecraftTest {
         };
 
         assertFalse(EntrySizer.isMeasuring());
-        EntrySizer.measure(RecipeFixtures.entries(3), writer, false);
+        EntrySizer.measure(RecipeFixtures.entries(3), writer, false, false);
 
         assertTrue(seenWhileWriting.get());
         assertFalse(EntrySizer.isMeasuring());
@@ -231,5 +235,57 @@ class RecipeBookSplitMinecraftTest {
         assertEquals(0, measure(List.of()).entryBytes().length);
         List<Entry> single = pads(1000);
         assertEquals(encodedSize(new ClientboundRecipeBookAddPacket(single, false)), measure(single).totalBytes());
+    }
+
+    @Test
+    void keptBytesEqualCodecBytesForEveryChunk() throws Exception {
+        List<Entry> entries = RecipeFixtures.entries(400);
+        EntrySizer.Measurement measurement = EntrySizer.measure(entries, RecipeFixtures.writer(), false, true);
+        List<Chunk> plan = ChunkPlanner.plan(measurement.entryBytes(), measurement.fixedOverheadBytes(), 262_144);
+        assertTrue(plan.size() > 1);
+        assertNotNull(measurement.encoded());
+
+        for (boolean replace : new boolean[] {true, false}) {
+            List<ClientboundRecipeBookAddPacket> chunks = ChunkPlanner.split(entries, replace, plan, ClientboundRecipeBookAddPacket::new);
+            for (int k = 0; k < chunks.size(); k++) {
+                Chunk chunk = plan.get(k);
+                ByteBuf expected = RecipeFixtures.encode(chunks.get(k));
+                ByteBuf kept = Unpooled.buffer();
+                measurement.encoded().writePacket(kept, IntStream.range(chunk.start(), chunk.end()).toArray(), chunks.get(k).replace(), chunk.bytes());
+
+                assertEquals(ByteBufUtil.hexDump(expected), ByteBufUtil.hexDump(kept), "replace=" + replace + " chunk " + k);
+                expected.release();
+                kept.release();
+            }
+        }
+    }
+
+    @Test
+    void keepingBytesDoesNotChangeSizesOrDigest() throws Exception {
+        List<Entry> entries = RecipeFixtures.entries(60);
+
+        EntrySizer.Measurement without = EntrySizer.measure(entries, RecipeFixtures.writer(), true, false);
+        EntrySizer.Measurement with = EntrySizer.measure(entries, RecipeFixtures.writer(), true, true);
+
+        assertNull(without.encoded());
+        assertNotNull(with.encoded());
+        assertArrayEquals(without.entryBytes(), with.entryBytes());
+        assertEquals(without.fixedOverheadBytes(), with.fixedOverheadBytes());
+        assertEquals(without.sha256(), with.sha256());
+        assertEquals(with.totalBytes(), with.encoded().packetBytes(IntStream.range(0, entries.size()).toArray()));
+    }
+
+    @Test
+    void foreignLayoutKeepsNothing() throws Exception {
+        // A mod that appends something to every packet: the layout "id | count | entries | flag" no longer holds.
+        EntrySizer.PacketWriter trailing = (packet, out) -> {
+            RecipeFixtures.writer().write(packet, out);
+            out.writeByte(0);
+        };
+
+        EntrySizer.Measurement measurement = EntrySizer.measure(RecipeFixtures.entries(5), trailing, false, true);
+
+        assertNull(measurement.encoded());
+        assertEquals(5, measurement.entryBytes().length);
     }
 }

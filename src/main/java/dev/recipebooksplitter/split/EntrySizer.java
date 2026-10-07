@@ -1,6 +1,7 @@
 package dev.recipebooksplitter.split;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -35,8 +36,9 @@ public final class EntrySizer {
      * @param fixedOverheadBytes packet id VarInt plus the 1-byte replace flag
      * @param entryBytes encoded size of each entry
      * @param sha256 hex digest over all entry bytes, or null if not requested
+     * @param encoded the bytes of every entry, or null if they were not requested or a probe did not have the expected layout
      */
-    public record Measurement(int fixedOverheadBytes, int[] entryBytes, @Nullable String sha256) {
+    public record Measurement(int fixedOverheadBytes, int[] entryBytes, @Nullable String sha256, @Nullable EncodedEntries encoded) {
         public long totalBytes() {
             long sum = 0;
             for (int bytes : entryBytes) {
@@ -55,9 +57,13 @@ public final class EntrySizer {
      * its custom ingredient state), so a probe run from inside another encode on the same thread would wipe that state
      * for the outer packet. That needs a recipe packet to be sent from within an encode, which a vanilla nested write
      * would break in the same way, and nothing in the tested stack does it.
+     *
+     * <p>With {@code keepBytes} the entry bytes of the probes are kept (see {@link EncodedEntries}), at the price of one
+     * more {@code PacketEncoder.encode} call per measured packet: an empty packet with the other replace flag, to learn
+     * both flag bytes. Nothing is kept unless every probe has the layout {@code id | count | entry | replace}.
      */
     public static Measurement measure(List<ClientboundRecipeBookAddPacket.Entry> entries, PacketWriter writer,
-                                      boolean computeSha256) throws Exception {
+                                      boolean computeSha256, boolean keepBytes) throws Exception {
         boolean previous = MEASURING.get();
         MEASURING.set(Boolean.TRUE);
         ByteBuf scratch = Unpooled.buffer(4096);
@@ -65,6 +71,12 @@ public final class EntrySizer {
             MessageDigest digest = computeSha256 ? MessageDigest.getInstance("SHA-256") : null;
             // Empty packet: id + VarInt(0) + replace flag.
             int empty = encodedSize(writer, scratch, new ClientboundRecipeBookAddPacket(List.of(), false));
+            EncodedEntries kept = null;
+            if (keepBytes) {
+                byte[] emptyFalse = ByteBufUtil.getBytes(scratch, 0, empty);
+                int emptyTrue = encodedSize(writer, scratch, new ClientboundRecipeBookAddPacket(List.of(), true));
+                kept = EncodedEntries.forLayout(emptyFalse, ByteBufUtil.getBytes(scratch, 0, emptyTrue), entries.size());
+            }
             int fixedOverhead = empty - 1;
             // In a one-entry packet the entry follows the id and the 1-byte count. That is the same number as the
             // fixed overhead (id plus the 1-byte replace flag), but for a different reason.
@@ -77,8 +89,15 @@ public final class EntrySizer {
                 if (digest != null) {
                     digest.update(scratch.nioBuffer(entryOffset, sizes[i]));
                 }
+                if (kept != null) {
+                    if (kept.probeMatchesLayout(scratch, probe)) {
+                        kept.append(scratch, entryOffset, sizes[i]);
+                    } else {
+                        kept = null; // not the layout we know: the chunks are encoded normally
+                    }
+                }
             }
-            return new Measurement(fixedOverhead, sizes, digest == null ? null : HexFormat.of().formatHex(digest.digest()));
+            return new Measurement(fixedOverhead, sizes, digest == null ? null : HexFormat.of().formatHex(digest.digest()), kept);
         } finally {
             MEASURING.set(previous);
             scratch.release();
