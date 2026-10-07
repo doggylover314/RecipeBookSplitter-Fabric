@@ -30,8 +30,9 @@ public class RecipeBookSplitter implements DedicatedServerModInitializer {
         Path file = FabricLoader.getInstance().getConfigDir().resolve(CONFIG_FILE_NAME);
         setConfig(SplitterConfig.loadOrCreate(file, LOGGER));
         SplitterConfig loaded = config();
-        LOGGER.info("[RecipeBookSplitter] loaded: maxChunkBytes={} ({}), logSplits={}, logOversizedPackets={}",
-                Sizes.bytes(loaded.maxChunkBytes()), Sizes.mib(loaded.maxChunkBytes()), loaded.logSplits(), loaded.logOversizedPackets());
+        LOGGER.info("[RecipeBookSplitter] loaded: maxChunkBytes={} ({}), logSplits={}, logOversizedPackets={}, undeliverableEntries={}, bundleChunks={}",
+                Sizes.bytes(loaded.maxChunkBytes()), Sizes.mib(loaded.maxChunkBytes()), loaded.logSplits(), loaded.logOversizedPackets(),
+                loaded.undeliverableEntries().json(), loaded.bundleChunks());
         RecipeBookSendInterceptor.logStartup();
     }
 }

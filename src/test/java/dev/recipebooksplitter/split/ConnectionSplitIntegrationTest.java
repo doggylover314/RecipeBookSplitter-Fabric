@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.recipebooksplitter.RecipeBookSplitter;
 import dev.recipebooksplitter.config.SplitterConfig;
+import dev.recipebooksplitter.config.SplitterConfig.UndeliverableEntries;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
+import dev.recipebooksplitter.testutil.TestConfigs;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -35,7 +37,7 @@ import org.junit.jupiter.api.Test;
  * hook, the sizing through the real encoder and the re-send through {@code Connection.send} run exactly as on a server.
  */
 class ConnectionSplitIntegrationTest {
-    private static final int BUDGET = 65_536;
+    private static final int BUDGET = 262_144;
 
     private TestConnection test;
     private Connection connection;
@@ -49,7 +51,7 @@ class ConnectionSplitIntegrationTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        RecipeBookSplitter.setConfig(new SplitterConfig(BUDGET, true, true));
+        RecipeBookSplitter.setConfig(TestConfigs.budget(BUDGET, true));
         test = TestConnection.create(new PacketEncoder<>(RecipeFixtures.protocol()));
         connection = test.connection();
         channel = test.channel();
@@ -172,6 +174,8 @@ class ConnectionSplitIntegrationTest {
 
     @Test
     void smallAndNonRecipePacketsPassThrough() {
+        // With "send", a one-entry packet cannot be split and is left to vanilla (1.0.0 behaviour).
+        RecipeBookSplitter.setConfig(TestConfigs.of(BUDGET, true, UndeliverableEntries.SEND, false));
         List<Packet<?>> packets = List.of(
                 new ClientboundRecipeBookAddPacket(List.of(), true),
                 new ClientboundRecipeBookAddPacket(List.of(RecipeFixtures.entry(1, 3 * BUDGET, (byte) 0)), false),
@@ -188,6 +192,20 @@ class ConnectionSplitIntegrationTest {
             assertSame(packet, recorder.messages.get(0));
             assertNull(recorder.resent.get(0), "the vanilla path does not go through our chunk writer");
         }
+    }
+
+    @Test
+    void oneEntryPacketIsCheckedButSentUnchangedWithDrop() {
+        // With "drop" (the default) a one-entry packet is measured, because its entry might be undeliverable; a
+        // deliverable one is re-sent as the same object.
+        ClientboundRecipeBookAddPacket one = new ClientboundRecipeBookAddPacket(List.of(RecipeFixtures.entry(1, 3 * BUDGET, (byte) 0)), false);
+
+        connection.send(one);
+        channel.runPendingTasks();
+
+        assertEquals(1, recorder.messages.size());
+        assertSame(one, recorder.messages.get(0));
+        assertSame(one, recorder.resent.get(0), "measured, then re-sent through the same guard");
     }
 
     @Test

@@ -10,6 +10,7 @@ import dev.recipebooksplitter.RecipeBookSplitter;
 import dev.recipebooksplitter.config.SplitterConfig;
 import dev.recipebooksplitter.testutil.LogCapture;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
+import dev.recipebooksplitter.testutil.TestConfigs;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -29,7 +30,7 @@ import org.junit.jupiter.api.Test;
 
 /** How the interceptor behaves around the edges: the recursion guard, closed channels, missing encoders, failures. */
 class RecipeBookSendInterceptorTest {
-    private static final int BUDGET = 65_536;
+    private static final int BUDGET = 262_144;
 
     @BeforeAll
     static void bootstrap() {
@@ -38,7 +39,7 @@ class RecipeBookSendInterceptorTest {
 
     @BeforeEach
     void setUp() {
-        RecipeBookSplitter.setConfig(new SplitterConfig(BUDGET, true, false));
+        RecipeBookSplitter.setConfig(TestConfigs.budget(BUDGET));
         RecipeBookSendInterceptor.WARNED_NO_ENCODER.set(false);
     }
 

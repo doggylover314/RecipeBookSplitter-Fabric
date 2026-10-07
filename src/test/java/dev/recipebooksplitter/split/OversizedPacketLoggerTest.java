@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.recipebooksplitter.RecipeBookSplitter;
 import dev.recipebooksplitter.config.SplitterConfig;
+import dev.recipebooksplitter.config.SplitterConfig.UndeliverableEntries;
 import dev.recipebooksplitter.testutil.LogCapture;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
+import dev.recipebooksplitter.testutil.TestConfigs;
 import java.util.List;
 import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
@@ -31,7 +33,8 @@ class OversizedPacketLoggerTest {
 
     /** Sends the packet through a real connection and encoder and returns the mod's WARN messages. */
     private static List<String> warningsWhenSending(boolean logOversizedPackets, ClientboundRecipeBookAddPacket packet) throws Exception {
-        RecipeBookSplitter.setConfig(new SplitterConfig(65_536, true, logOversizedPackets));
+        // "send": one-entry packets are then left to vanilla, as in 1.0.0, so only the logger speaks.
+        RecipeBookSplitter.setConfig(TestConfigs.of(262_144, logOversizedPackets, UndeliverableEntries.SEND, false));
         try (TestConnection test = TestConnection.create(new PacketEncoder<>(RecipeFixtures.protocol()));
              LogCapture log = new LogCapture("RecipeBookSplitter")) {
             test.connection().send(packet);
@@ -51,7 +54,7 @@ class OversizedPacketLoggerTest {
         assertEquals(1, warnings.size(), warnings.toString());
         String message = warnings.get(0);
         assertTrue(message.contains(OVERSIZED + " for embedded: 4.8 MiB ("), message);
-        assertTrue(message.endsWith(" - exceeds the 2,097,151-byte frame limit if compression is disabled"), message);
+        assertTrue(message.endsWith(" - over 2,097,151 bytes: it only fits in a frame if network compression shrinks it below that"), message);
     }
 
     @Test

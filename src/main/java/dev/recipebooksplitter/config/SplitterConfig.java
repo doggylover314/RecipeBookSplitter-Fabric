@@ -13,6 +13,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Objects;
 import java.util.Set;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -22,27 +23,72 @@ import org.slf4j.Logger;
  *                      before compression)
  * @param logSplits log an INFO line whenever a packet had to be split
  * @param logOversizedPackets log a WARN line for every encoded clientbound packet over 4 MiB
+ * @param undeliverableEntries what to do with a recipe display entry that this connection cannot send even in a
+ *                             packet of its own
+ * @param bundleChunks send the chunks of one split inside one bundle, so the client handles them in one tick
  */
-public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOversizedPackets) {
+public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOversizedPackets,
+                             UndeliverableEntries undeliverableEntries, boolean bundleChunks) {
     public static final int DEFAULT_MAX_CHUNK_BYTES = 1_048_576;
-    public static final int MIN_MAX_CHUNK_BYTES = 65_536;
     /**
-     * Stays below the 2,097,151-byte limit of the 3-byte VarInt frame length, which is the effective packet limit
-     * when network compression is off (common behind Velocity), leaving room for compression and ViaVersion overhead.
+     * Every chunk makes a vanilla client rebuild its recipe book and start a background rebuild of its search index. A
+     * real client spent 4-8 times more render-thread time on 145 chunks (65,536 bytes each) than on 9 (1 MiB); this
+     * minimum keeps a 9.2 MB book at about 36 chunks.
      */
-    public static final int MAX_MAX_CHUNK_BYTES = 2_000_000;
+    public static final int MIN_MAX_CHUNK_BYTES = 262_144;
+    /**
+     * A frame holds at most 2,097,151 bytes as sent: the raw packet when network compression is off, the compressed
+     * packet when it is on, and the raw packet again behind a proxy that forwards it uncompressed (Velocity with
+     * {@code compression-threshold = -1}). ViaVersion translates after the mod has measured, and grew one chunk by
+     * 25.3 % (1,999,931 to 2,507,176 bytes, for a 26.2 client, which disconnected with compression off). Even with that
+     * growth a 1,500,000-byte chunk (1.88 MB) stays below the limit.
+     */
+    public static final int MAX_MAX_CHUNK_BYTES = 1_500_000;
 
-    public static final SplitterConfig DEFAULTS = new SplitterConfig(DEFAULT_MAX_CHUNK_BYTES, true, false);
+    public static final SplitterConfig DEFAULTS =
+            new SplitterConfig(DEFAULT_MAX_CHUNK_BYTES, true, false, UndeliverableEntries.DROP, false);
+
+    /** The values of the {@code undeliverableEntries} key. */
+    public enum UndeliverableEntries {
+        /** Leave out entries that certainly cannot be sent over this connection, and log an ERROR. */
+        DROP("drop"),
+        /** Send them anyway, as without the mod; the player is then disconnected. */
+        SEND("send");
+
+        private final String json;
+
+        UndeliverableEntries(String json) {
+            this.json = json;
+        }
+
+        public String json() {
+            return json;
+        }
+
+        /** Exact, case-sensitive match; null for anything else. */
+        static @Nullable UndeliverableEntries fromJson(String value) {
+            for (UndeliverableEntries mode : values()) {
+                if (mode.json.equals(value)) {
+                    return mode;
+                }
+            }
+            return null;
+        }
+    }
 
     private static final String KEY_MAX_CHUNK_BYTES = "maxChunkBytes";
     private static final String KEY_LOG_SPLITS = "logSplits";
     private static final String KEY_LOG_OVERSIZED_PACKETS = "logOversizedPackets";
-    private static final Set<String> KNOWN_KEYS = Set.of(KEY_MAX_CHUNK_BYTES, KEY_LOG_SPLITS, KEY_LOG_OVERSIZED_PACKETS);
+    private static final String KEY_UNDELIVERABLE_ENTRIES = "undeliverableEntries";
+    private static final String KEY_BUNDLE_CHUNKS = "bundleChunks";
+    private static final Set<String> KNOWN_KEYS = Set.of(KEY_MAX_CHUNK_BYTES, KEY_LOG_SPLITS, KEY_LOG_OVERSIZED_PACKETS,
+            KEY_UNDELIVERABLE_ENTRIES, KEY_BUNDLE_CHUNKS);
 
     public SplitterConfig {
         if (maxChunkBytes < MIN_MAX_CHUNK_BYTES || maxChunkBytes > MAX_MAX_CHUNK_BYTES) {
             throw new IllegalArgumentException("maxChunkBytes out of range: " + maxChunkBytes);
         }
+        Objects.requireNonNull(undeliverableEntries, "undeliverableEntries");
     }
 
     /**
@@ -90,7 +136,9 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
         return new SplitterConfig(
                 parseMaxChunkBytes(value(object, KEY_MAX_CHUNK_BYTES, DEFAULT_MAX_CHUNK_BYTES, log), log),
                 parseBoolean(object, KEY_LOG_SPLITS, DEFAULTS.logSplits(), log),
-                parseBoolean(object, KEY_LOG_OVERSIZED_PACKETS, DEFAULTS.logOversizedPackets(), log));
+                parseBoolean(object, KEY_LOG_OVERSIZED_PACKETS, DEFAULTS.logOversizedPackets(), log),
+                parseUndeliverableEntries(value(object, KEY_UNDELIVERABLE_ENTRIES, DEFAULTS.undeliverableEntries().json(), log), log),
+                parseBoolean(object, KEY_BUNDLE_CHUNKS, DEFAULTS.bundleChunks(), log));
     }
 
     /** The value of a key, or null (logged at INFO, the same for every key) if it is missing. */
@@ -119,15 +167,31 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
             return DEFAULT_MAX_CHUNK_BYTES;
         }
         if (integer.compareTo(BigInteger.valueOf(MIN_MAX_CHUNK_BYTES)) < 0) {
-            log.warn("[RecipeBookSplitter] {} {} is below the minimum {}; using {}", KEY_MAX_CHUNK_BYTES, value, MIN_MAX_CHUNK_BYTES, MIN_MAX_CHUNK_BYTES);
+            log.warn("[RecipeBookSplitter] {} {} is below the minimum {} (every chunk makes the client rebuild its recipe book); using {}",
+                    KEY_MAX_CHUNK_BYTES, value, MIN_MAX_CHUNK_BYTES, MIN_MAX_CHUNK_BYTES);
             return MIN_MAX_CHUNK_BYTES;
         }
         if (integer.compareTo(BigInteger.valueOf(MAX_MAX_CHUNK_BYTES)) > 0) {
-            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (the frame limit is 2,097,151 bytes when compression is off); using {}",
+            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to add up to 25%); using {}",
                     KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
             return MAX_MAX_CHUNK_BYTES;
         }
         return integer.intValueExact();
+    }
+
+    private static UndeliverableEntries parseUndeliverableEntries(@Nullable JsonElement element, Logger log) {
+        if (element == null) {
+            return DEFAULTS.undeliverableEntries();
+        }
+        UndeliverableEntries mode = element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
+                ? UndeliverableEntries.fromJson(element.getAsString())
+                : null;
+        if (mode == null) {
+            log.warn("[RecipeBookSplitter] '{}' must be \"drop\" or \"send\", got {}; using default \"{}\"",
+                    KEY_UNDELIVERABLE_ENTRIES, element, DEFAULTS.undeliverableEntries().json());
+            return DEFAULTS.undeliverableEntries();
+        }
+        return mode;
     }
 
     private static boolean parseBoolean(JsonObject object, String key, boolean fallback, Logger log) {
@@ -147,6 +211,8 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
         object.addProperty(KEY_MAX_CHUNK_BYTES, maxChunkBytes);
         object.addProperty(KEY_LOG_SPLITS, logSplits);
         object.addProperty(KEY_LOG_OVERSIZED_PACKETS, logOversizedPackets);
+        object.addProperty(KEY_UNDELIVERABLE_ENTRIES, undeliverableEntries.json());
+        object.addProperty(KEY_BUNDLE_CHUNKS, bundleChunks);
         return new GsonBuilder().setPrettyPrinting().create().toJson(object);
     }
 }

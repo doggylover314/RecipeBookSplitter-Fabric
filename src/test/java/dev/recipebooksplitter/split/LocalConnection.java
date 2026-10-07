@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import net.minecraft.network.Connection;
 import net.minecraft.network.HandlerNames;
+import net.minecraft.network.PacketBundleUnpacker;
 import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
@@ -28,7 +29,8 @@ import net.minecraft.network.protocol.game.ClientGamePacketListener;
 
 /**
  * A server-side {@link Connection} on a real (not embedded) in-memory channel with its own event loop thread, so that
- * sends from the test thread go through the event loop like on a server. The peer just discards what it receives.
+ * sends from the test thread go through the event loop like on a server. The peer just discards what it receives. With
+ * an encoder the pipeline also has the bundle unpacker, as vanilla's does.
  */
 final class LocalConnection implements AutoCloseable {
     final Connection connection = new Connection(PacketFlow.SERVERBOUND);
@@ -57,6 +59,7 @@ final class LocalConnection implements AutoCloseable {
                                     super.encode(ctx, packet, out);
                                 }
                             });
+                            child.pipeline().addLast(HandlerNames.UNBUNDLER, new PacketBundleUnpacker(RecipeFixtures.protocol().bundlerInfo()));
                         }
                         child.pipeline().addLast("recorder", recorder);
                         child.pipeline().addLast(HandlerNames.PACKET_HANDLER, connection);

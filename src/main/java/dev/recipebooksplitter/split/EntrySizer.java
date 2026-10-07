@@ -104,6 +104,25 @@ public final class EntrySizer {
         }
     }
 
+    /**
+     * Encodes one packet with the probe writer, flagged as a measuring probe like the ones in {@link #measure}. Used
+     * for the exact bytes of a chunk when {@code measure} did not keep any. The caller releases the returned buffer.
+     */
+    static ByteBuf encodeProbe(PacketWriter writer, Packet<?> packet) throws Exception {
+        boolean previous = MEASURING.get();
+        MEASURING.set(Boolean.TRUE);
+        ByteBuf out = Unpooled.buffer();
+        try {
+            writer.write(packet, out);
+            return out;
+        } catch (Throwable t) {
+            out.release();
+            throw t;
+        } finally {
+            MEASURING.set(previous);
+        }
+    }
+
     private static int encodedSize(PacketWriter writer, ByteBuf scratch, Packet<?> packet) throws Exception {
         scratch.clear();
         writer.write(packet, scratch);

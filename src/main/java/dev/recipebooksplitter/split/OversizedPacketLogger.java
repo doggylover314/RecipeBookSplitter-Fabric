@@ -11,7 +11,6 @@ import net.minecraft.network.protocol.Packet;
 /** Backs the {@code logOversizedPackets} option: a warning for every clientbound packet that encodes to over 4 MiB. */
 public final class OversizedPacketLogger {
     public static final int THRESHOLD_BYTES = 4 * 1024 * 1024;
-    private static final int UNCOMPRESSED_LIMIT_BYTES = 8_388_608;
 
     private OversizedPacketLogger() {}
 
@@ -30,8 +29,8 @@ public final class OversizedPacketLogger {
         String recipient = ctx.pipeline().get(HandlerNames.PACKET_HANDLER) instanceof Connection connection
                 ? RecipeBookSendInterceptor.describe(connection)
                 : String.valueOf(ctx.channel().remoteAddress());
-        String note = size > UNCOMPRESSED_LIMIT_BYTES ? " - exceeds the 8,388,608-byte limit"
-                : size > RecipeBookSendInterceptor.FRAME_LIMIT_BYTES ? " - exceeds the 2,097,151-byte frame limit if compression is disabled"
+        String note = size > ConnectionLimits.COMPRESSION_LIMIT_BYTES ? " - exceeds the 8,388,608-byte limit"
+                : size > ConnectionLimits.FRAME_LIMIT_BYTES ? " - over 2,097,151 bytes: it only fits in a frame if network compression shrinks it below that"
                 : "";
         RecipeBookSplitter.LOGGER.warn("[RecipeBookSplitter] oversized clientbound packet {} for {}: {} ({} bytes){}",
                 packet.type(), recipient, Sizes.mib(size), Sizes.bytes(size), note);
