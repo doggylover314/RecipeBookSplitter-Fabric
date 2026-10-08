@@ -42,8 +42,8 @@ own. The first run downloads Minecraft, its libraries and the assets through Loo
 | C | mod, `maxChunkBytes` 262,144 | as B, about 36 chunks per book |
 | D | mod behind Velocity + FabricProxy-Lite | as B (`RELOGS`, default 1) |
 | E | mod, network compression off | as B |
-| F | mod plus one recipe whose entry is 4.5 MB | the client rejects it (`NbtAccounterException`, the 2 MiB NBT quota of the client): documents why the mod does not drop entries because of that quota (the assertion accepts any unexpected disconnect; the cause is in `events.jsonl`) |
-| G | mod with `bundleChunks` | as B; every book is handled in a single frame and tick (loose chunks on loopback are too, see [Status](#status)) |
+| F | mod plus one recipe whose entry is 4.5 MB | the client rejects it (`NbtAccounterException`, the 2 MiB NBT quota of the client): documents why the mod does not drop entries because of that quota (the assertion needs `NbtAccounterException` in the disconnect reason or in a connection exception chain of `events.jsonl`, so a disconnect for any other reason fails) |
+| G | mod with `bundleChunks` | as B; the server's split lines say `in one bundle` and every book is handled in a single frame and tick (loose chunks on loopback are handled in one frame too, which is why the split lines are checked, see [Status](#status)) |
 | H | as B over a link limited to `THROTTLE_KBIT` (default 8000) by `../throttle.py` | as B |
 | I | H with `bundleChunks` | as G, over the slow link |
 | J | as B, then `/reload` while the client stays connected | the reload book (`replace=true`) is complete too |
@@ -54,8 +54,9 @@ Each scenario starts a server with the kit's data pack (3000 recipes, 9.2 MB boo
 default 1; scenario J sends `/reload` instead) and runs `analyze.py`. It prints the numbers (render-thread time in
 `handleRecipeBookAdd`, background search builds that ran, frames and ticks spanned by each book, time from the first
 decode to the last handle) and PASS/FAIL assertions (client recipe count against the entries the server sent, packet
-and chunk counts, id-list hash after the give and after every relog, client-side entry digest against the server's
-digest, single-frame handling with `bundleChunks`).
+and chunk counts, whether the server's split lines say `in one bundle` (with `bundleChunks`) or not (without it),
+id-list hash after the give and after every relog, client-side entry digest against the server's digest, single-frame
+handling with `bundleChunks`).
 
 Environment variables are listed at the top of `run_client_e2e.sh` and `../lib.sh`; `RBS_DIGEST=0` switches the client's
 entry digest off (see [Frame times](#frame-times)). The client needs: `Xvfb`, Mesa's
@@ -79,15 +80,19 @@ same host, as in the kit. All of it is in `events.jsonl` (the `summary` events, 
 **Frame times need the digest off.** With the digest on (the default, and what the assertions that compare the client's
 entry hashes with the server's need) the client re-encodes every entry it received on the render thread, inside the
 frame that handles the packets. For a 9 MB book that adds several hundred ms to the frame, and with `bundleChunks` the
-whole book is handled in one frame, so the bundle's frame looks much worse than it is (verification: the slowest frame
-that handled the book was 512 ms with the digest on and 190 ms with it off for scenario I at 8000 kbit/s, 184 and 95 ms
-for H). Run `RBS_DIGEST=0 run_client_e2e.sh H I` to compare frames; `analyze.py` then skips the two comparisons with the
-server's digest and prints a note when the digest was on. (Gradle drops an environment variable such as
-`ORG_GRADLE_PROJECT_rbs.harness.digest` that has a dot in its name when it is started from the `gradlew` shell script,
-so the script passes `-Prbs.harness.digest=false` itself.)
+whole book is handled in one frame, so the bundle's frame looks much worse than it is (verification, scenario I at 8000
+kbit/s, give: the slowest frame that handled the book was 512 ms with the digest on (median of the lane's three
+digest-on runs) and 228 ms with it off (median of 12 runs; 190 ms in the lane's own three digest-off runs, the
+like-for-like sample); for H 184 ms against 104 ms (95 ms in the lane's three runs); the table in the main README under
+`bundleChunks` has the 12-run medians). Run `RBS_DIGEST=0 run_client_e2e.sh H I` to compare frames; `analyze.py` then
+skips the two comparisons with the server's digest on purpose and says so; with the digest on it prints a note about the
+frame times, and a digest line missing on either side is a FAIL. (The `gradlew` script runs under `/bin/sh`, and shells
+such as dash drop an environment variable whose name contains a dot, such as `ORG_GRADLE_PROJECT_rbs.harness.digest`,
+before Gradle starts, so the script passes `-Prbs.harness.digest=false` itself.)
 
-`python3 -I test_analyze.py` checks `analyze.py` against a synthetic run (the frame table, the digest note, and events from a
-harness without the frame timers); it needs no Minecraft.
+`python3 -I test_analyze.py` checks `analyze.py` against synthetic runs (the frame table, the digest note, a digest line
+missing on either side, bundled against loose delivery in the server log, the F assertion, and events from a harness
+without the frame timers); it needs no Minecraft.
 
 ## Pinned third-party files
 
@@ -123,9 +128,10 @@ says otherwise; the client on JDK 21 with Loader 0.19.5, which the harness pins;
 20.1.2), 4 CPUs shared with another job; Velocity 4.2.0 with FabricProxy-Lite 2.11.0 on the Temurin 25.0.4.1 JRE):
 
 - A, B, C, D, E, F, G, J and K passed on the first run (3, 13, 13, 23, 13, 2, 15, 13 and 15 assertions). 14 repeats with
-  `RELOGS=3` (B, C, D, E, G, J and K, twice each) passed too (23, 23, 23, 23, 27, 13 and 27 assertions). B and D on a
-  Java 25 server (Temurin 25.0.4.1+1, Loader 0.19.0, MixinExtras 0.5.3) passed twice each (13 and 23 assertions, then 23
-  and 23). 27 runs, none failed. In D, K and the Java 25 D the client's connection went through Velocity (`velocity.log`).
+  `RELOGS=3` (B, C, D, E, G, J and K, twice each; J ignores it, it does a `/reload` and no relog) passed too (23, 23,
+  23, 23, 27, 13 and 27 assertions). B and D on a Java 25 server (Temurin 25.0.4.1+1, Loader 0.19.0, MixinExtras 0.5.3)
+  passed twice each (13 and 23 assertions, then 23 and 23). 27 runs, none failed. In D, K and the Java 25 D the client's
+  connection went through Velocity (`velocity.log`).
 - A: disconnected twice, `Packet too big (is 9227553, should be less than 8388608)` at the give and `(is 9227717 ...)`
   after the rejoin; the client never held more than one recipe.
 - B, D, E, G, J, K: 9 packets per book; C: 36 packets (`maxChunkBytes` 262,144). The give: 4,457 entries (the client then
@@ -133,11 +139,13 @@ says otherwise; the client on JDK 21 with Loader 0.19.5, which the harness pins;
   the first packet. The same SHA-256 of the sorted id list every time, and the client's re-encoded entry hashes equal to
   the server's digests (for example `e1c093f2197397b6` for the give, the same as in the 1.0.0 investigation, so the entry
   bytes did not change). The Java 25 runs gave the same.
-- F: `DecoderException: Failed to decode packet 'clientbound/minecraft:recipe_book_add'` caused by `NbtAccounterException:
-  Tried to read NBT tag that was too big; tried to allocate: 2043742 + 60000 bytes where max allowed: 2097152`, twice (the
-  rejoin hits it again). The mod split the 13.1 MiB book into 11 chunks, the 4.5 MB entry alone, with the WARN. The F
-  assertion of `analyze.py` is weak: it passes on any unexpected disconnect and never looks for the exception, so the
-  cause was read from `events.jsonl` by hand.
+- F: `DecoderException: Failed to decode packet 'clientbound/minecraft:recipe_book_add'` caused by
+  `NbtAccounterException: Tried to read NBT tag that was too big; tried to allocate: 2043742 + 60000 bytes where max
+  allowed: 2097152`, twice (the rejoin hits it again). The mod split the 13.1 MiB book into 11 chunks, the 4.5 MB entry
+  alone, with the WARN. The F assertion of `analyze.py` was weak at the time of these runs: it passed on any unexpected
+  disconnect and never looked for the exception, so the cause was read from `events.jsonl` by hand. It now needs the
+  `NbtAccounterException` (in the disconnect reason or in a connection exception chain), and the stored events of this
+  run pass it.
 - Render-thread time in `handleRecipeBookAdd` summed over a book, medians in ms (minimum to maximum; n): B give 70.8
   (58.2 to 170.7; 3), later joins 25.1 (12.9 to 70.4; 7); C 136.2 and 48.6; D 115.5 and 25.4; E 58.6 and 28.0; G 145.7
   and 26.7; J 149.3 and, for the `/reload` book, 50.2; K 98.8 and 29.5; on the Java 25 server B 64.4 and 34.4, D 48.7 and
@@ -146,16 +154,29 @@ says otherwise; the client on JDK 21 with Loader 0.19.5, which the harness pins;
   per book equal the packets handled; the number that ran was B give 5 of 9 (4 to 7), relog 8 of 9; C give 9 of 36 (8 to
   10), relog 15 of 36; D give 6 of 9; G give 7 of 9; K give 6 of 9.
 - Single frame and tick: all 20 bundled books of G and K were handled in one frame and one tick, but so were 42 of 42
-  loose books on loopback without a proxy (B 10, C 10, E 10, J 6 and the Java 25 B 6). Only loose chunks through Velocity
-  ever spread out: 3 of 12 books of D (Java 21) spanned 2 frames and 2, 3 and 7 ticks, none of the 8 of the Java 25 D.
-  The assertion therefore shows that a bundle is handled at once, not that a bundle was used (the server log says `in
-  one bundle`), and G and K alone do not show a difference; the throttled H and I do.
-- H, I and K (throttled, frame times): 60 runs with the digest off, three from the verification lane and three each from
-  three reruns in fresh clones of commits `4b39263` and `51af71a`, per row of the table in the main README under
-  `bundleChunks` (11 assertions for H, 13 for I and K), and 22 runs with the digest on (13, 15 and 15 assertions, which add
-  the comparison of the client's entry hashes with the server's digest). All passed, no disconnect, every book of I and K
-  in one frame and one tick, so the frame and tick counters and the frame timers have run. Numbers are in the main README
-  under `bundleChunks`.
+  loose books on loopback without a proxy (B 10, C 10, E 10, J 6 and the Java 25 B 6). Only loose chunks through
+  Velocity ever spread out: 3 of 12 books of D (Java 21) spanned 2 frames and 2, 3 and 7 ticks, none of the 8 of the
+  Java 25 D. The single-frame assertion alone therefore shows that a bundle is handled at once, not that a bundle was
+  used, and G and K alone do not show a difference; the throttled H and I do. In these runs that G, I and K used a
+  bundle was read from the server log (`in one bundle`); `analyze.py` has since made the server's split lines part of
+  the chunk-count assertions (with `bundleChunks` every split line must say `in one bundle`, without it none may),
+  without changing the number of assertions; the stored events and server logs of 137 earlier runs (all scenarios, among
+  them the 60 digest-off runs of the table) pass them.
+- H and I (throttled) and K (behind Velocity, not throttled), frame times: 60 runs with the digest off, three from the
+  verification lane and three each from three reruns in fresh clones of commits `4b39263` and `51af71a`, per row of the
+  table in the main README under `bundleChunks` (11 assertions for H, 13 for I and K), and 22 runs with the digest on
+  (13, 15 and 15 assertions, which add the comparison of the client's entry hashes with the server's digest). All
+  passed, no disconnect, every book of I and K in one frame and one tick, so the frame and tick counters and the frame
+  timers have run. Numbers are in the main README under `bundleChunks`.
+
+- Which harness ran which scenario: A to G and J of the verification ran with the harness of commit `1b87fb7`, H, I and
+  K with the one of `4b39263` (it added the frame timers, the keep-alive hook and the digest switch; its client sources
+  are unchanged since). To close that gap, A, B, C, D, E, F, G, J and K were run once more with the client sources of
+  `4b39263` and the `analyze.py` of commit `950f6a8` (a fresh clone, the release jar, the digest on, the default
+  `RELOGS`, Java 21 server, Loader 0.19.5, own ports): every one passed on its first run (3, 13, 13, 13, 13, 2, 15, 13
+  and 15 assertions for A, B, C, D, E, F, G, J and K). F found the `NbtAccounterException` in the exception chain with
+  the new assertion, G and K logged `in one bundle` for both of their books, and B, C, D, E and J logged no bundle. The
+  client's entry hashes equalled the server's digests again (`e1c093f2197397b6` for the give, as before).
 
 Not covered: Polymer items and ViaFabric with this harness (the investigation drove real 26.1 and 26.2 clients through
 ViaFabric with a throwaway script, and did not inspect their recipe books), online mode, a GPU, sound, other operating

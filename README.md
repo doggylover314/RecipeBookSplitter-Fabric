@@ -4,18 +4,18 @@ A server-side Fabric mod for Minecraft 1.21.11 that splits oversized recipe book
 that players who know thousands of recipes can join.
 
 How to read the evidence in this file: numbers named "1.0.0" were measured with the 1.0.0 jar by investigation runs that
-used the harnesses now in [e2e/](e2e/README.md) (their logs are not in the repository). Numbers named "first
-encode-once build" come from the tree of the first 1.1.0 commit (before bundles and undeliverable entries), which was
-never released. Numbers from the opt-in benchmark are named as such: it runs the mod's code in a unit-test pipeline, not
-a release jar. Numbers named "review" come from checks made while the 1.1.0 code was reviewed (scratch copies of the
+used the harnesses now in [e2e/](e2e/README.md) (their logs are not in the repository). Numbers named "first encode-once
+build" come from the tree of the first 1.1.0 commit (before bundles and undeliverable entries), which was never
+released. Numbers from the opt-in benchmark are named as such: it runs the mod's code in a unit-test pipeline, not a
+release jar. Numbers named "review" come from checks made while the 1.1.0 code was reviewed (scratch copies of the
 repository, the kit's scenarios or unit tests; not repeated with the release jar). Numbers named "verification" come
 from the verification runs of 1.1.0 with the release jar `recipebooksplitter-1.1.0.jar` (SHA-256
 `24a82085e4ad49bb3894b25624f854ae943610d368d152d4883a153d6cfc249f`, built with `./gradlew build` from the main code of
-commit `1b87fb7`; the later commits changed only the e2e kit and the documentation, and a rebuild gives the same
-jar). Unless a cell says otherwise, the server ran on JDK 21.0.11 with Fabric Loader 0.19.5, Fabric API 0.141.6 and
-Polymer 0.15.2, each scenario was run once, and the machine was a 4-CPU VM that another job shared, so timings carry
-noise (the logs are not in the repository). What was not run, or not measured, is listed under
-[Verification gaps](#verification-gaps).
+commit `1b87fb7`; the later commits changed only the e2e kit, the documentation and the Javadoc of
+`ConnectionMixin.java`, and a rebuild gives the same jar). Unless a cell says otherwise, the server ran on JDK 21.0.11
+with Fabric Loader 0.19.5, Fabric API 0.141.6 and Polymer 0.15.2, each scenario was run once, and the machine was a
+4-CPU VM that another job shared, so timings carry noise (the logs are not in the repository). What was not run, or not
+measured, is listed under [Verification gaps](#verification-gaps).
 
 ## What it does
 
@@ -30,21 +30,21 @@ single packet is too big and the player is disconnected on join or when the reci
 Recipe Book Splitter replaces such a packet with several smaller `recipe_book_add` packets that together carry the same
 entries in the same order with the same flags. Packets that fit are sent as they are.
 
-A real, unmodified 1.21.11 client ended up with the same recipe book (tested with 1.0.0): 4,458 recipes after
-`recipe give` and after each of three relogs, the same hash of the recipe id list every time, all 4,458 highlighted as
-the server had flagged them, and a hash of the entries it had received that equals the digest the server logged (about
-40 comparisons; directly, behind Velocity, with compression off and with 65,536-byte chunks). Without the mod the same
+A real, unmodified 1.21.11 client ended up with the same recipe book (tested with 1.0.0): 4,458 recipes after `recipe
+give` and after each of three relogs, the same hash of the recipe id list every time, all 4,458 highlighted as the
+server had flagged them, and a hash of the entries it had received that equals the digest the server logged (about 40
+comparisons; directly, behind Velocity, with compression off and with 65,536-byte chunks). Without the mod the same
 client was disconnected after the give and again when it rejoined. The 1.1.0 jar gave the same result (verification, the
-real-client scenarios A to G, J and K): every scenario passed on the first run; 14 repeats with three relogs each (B, C,
-D, E, G, J and K, twice each) passed too, and so did B and D on a Java 25 server with Loader 0.19.0 (two runs each), 27
-runs in all. With the mod the client got 9 packets per book at 1 MiB (36 at 262,144 bytes, scenario C), 4,457 entries on
-the give and 4,458 on every relog, `replace` only on the first packet, the same id-list hash after the give and after
-every relog, and entry hashes equal to the server's digests, directly, behind Velocity (D, K), with compression off (E),
-with `bundleChunks` (G, K) and after a `/reload` (J). Without the mod (A) the client was disconnected twice with
-`Packet too big`. Scenario F (one 4.5 MB entry) is the documented limit: the client's 2 MiB NBT quota rejected it. The
-real client scenarios H, I and K measured `bundleChunks` (see [bundleChunks](#bundlechunks)). Toasts were not observed.
-By the client code, a split gives one toast with the same items, unless chunks that carry notifications arrive more than
-about 5.6 seconds apart.
+real-client scenarios A to G, J and K): every scenario passed on the first run; 14 repeats (B, C, D, E, G and K with
+three relogs each, J again with its `/reload` and no relog, twice each) passed too, and so did B and D on a Java 25
+server with Loader 0.19.0 (two runs each), 27 runs in all. With the mod the client got 9 packets per book at 1 MiB (36
+at 262,144 bytes, scenario C), 4,457 entries on the give and 4,458 on every relog, `replace` only on the first packet,
+the same id-list hash after the give and after every relog, and entry hashes equal to the server's digests, directly,
+behind Velocity (D, K), with compression off (E), with `bundleChunks` (G, K) and after a `/reload` (J). Without the mod
+(A) the client was disconnected twice with `Packet too big`. Scenario F (one 4.5 MB entry) is the documented limit: the
+client's 2 MiB NBT quota rejected it. The real client scenarios H, I and K measured `bundleChunks` (see
+[bundleChunks](#bundlechunks)). Toasts were not observed. By the client code, a split gives one toast with the same
+items, unless chunks that carry notifications arrive more than about 5.6 seconds apart.
 
 One kind of entry cannot be helped by splitting: a single recipe display entry that the connection cannot carry even in
 a packet of its own. By default the mod leaves such an entry out and logs an ERROR that names it, so the player can
@@ -264,7 +264,8 @@ The first, second and fourth held:
 - Nothing failed: besides the real client, E8d (Velocity 4.2.0 + FabricProxy-Lite 2.11.0, 40 of 40 assertions) passed on
   a Java 21 and a Java 25 backend, and VC (ViaFabric 0.4.21+166, a 26.1 client, 60 of 60) on Java 25 and 21; there all 9
   chunks of every book arrived translated in one bundle that held nothing else (`recipe_book_add` as packet id 74 where
-  the 774 control got 72; largest translated frame 785,825 bytes). Polymer 0.15.2 was loaded in these runs.
+  the 774 control got 72; largest translated frame 785,825 bytes). The Polymer mod 0.15.2 was loaded in these runs, with
+  vanilla-item recipes.
 - The bundle cut the search builds that run from 9 to 4 for a give and from 10 to 6 (5 to 7) for a relog, and the
   book was no longer partly there for 129 to 130 ticks (about 6.5 s) at 8 Mbit/s or 54 to 55 ticks (about 2.7 s) at
   20 Mbit/s. The background CPU of the builds is about the same for a give (709 against 671 ms at 8 Mbit/s, 656 against
@@ -282,23 +283,29 @@ On a client with a GPU rendering would take a smaller share of the frame, so by 
 weigh more there (inferred, not measured).
 
 The keep-alive margin is the same with and without the bundle. A keep-alive queued behind the book arrived 7.6 s late
-(H) and 7.5 s late (I) at 8 Mbit/s, and 3.2 s (H) and 3.6 s (I) at 20 Mbit/s (probe runs, one per case; the first to the
-last decoded chunk takes about 6.5 s and 2.75 s, and the delay also includes the first chunk), which leaves about 7.4 s
-and 11.4 s of the server's 15 s keep-alive window; no `Timed out` appeared in any server log. In the 60 runs of the
-table keep-alive packets reached the client within 14 ms. Frame times need the digest off: a client that also computes
-the digest re-encodes the entries inside the frame that handles them, and measured slowest frames about 2 to 3 times
-higher (I at 8 Mbit/s, give: 512 ms, median of three digest-on runs of the lane, against 228 ms with the digest off; 703
-ms in one digest-on run of a rerun, with 590 ms of packet handling in that frame; see
-[e2e/realclient](e2e/realclient/README.md)).
+(H) and 7.5 s late (I) at 8 Mbit/s, and 3.2 s (H) and 3.6 s (I) at 20 Mbit/s (probe runs that place a keep-alive behind
+the book: at 8 Mbit/s the largest of three runs with different timing, in the third of which the keep-alive missed the
+book, and a single run at 20 Mbit/s; the first to the last decoded chunk takes about 6.5 s and 2.75 s, and the delay
+also includes the first chunk), which leaves about 7.4 s and 11.4 s of the server's 15 s keep-alive window; no
+`Timed out` appeared in any server log. In the 60 runs of the table no keep-alive was queued behind a book (all 264
+reached the client within 14 ms, the 24 sent during play within 3 ms, and none was in flight while a book was being
+received), so those runs say nothing about this margin; the probe runs do. A link slow enough to use the whole window is
+a limit that no setting changes (see [Limitations](#limitations)). Frame times need the digest off: a client that also
+computes the digest re-encodes the entries inside the frame that handles them, and measured slowest frames about 2 to 3
+times higher (I at 8 Mbit/s, give: 512 ms, median of three digest-on runs of the lane, against 228 ms with the digest
+off, median of 12 runs, or 190 ms in the lane's own three digest-off runs; 703 ms in one digest-on run of a rerun, with
+590 ms of packet handling in that frame; see [e2e/realclient](e2e/realclient/README.md)).
 
-So the default stays `false`. Opting in is safe on the tested stack (Velocity with FabricProxy-Lite, ViaFabric,
-Polymer): no run disconnected. Turn it on if a half-filled book on slow links, or the number of builds, matters more to
-you than one frame of roughly 200 to 300 ms on a slow client. Scenario G (unthrottled, direct) passed with every book in
-one frame and one tick, but that does not tell the two apart: loose chunks on the same loopback link were handled in one
-frame as well (42 of 42 books in B, C, E, J and the Java 25 run of B), and G's frame time was not measured. Also not
-measured: a GPU client, a 4 Mbit/s link, older clients through ViaBackwards, and a recipe screen open with search text
-while the book arrives (by the client code each chunk then waits for a full index build, and with a bundle all those
-waits would fall into the same frame; a headless model of the client gave 0.28 to 0.65 s in total for 9 chunks).
+So the default stays `false`. Opting in was safe on the tested stack (Velocity with FabricProxy-Lite, ViaFabric, Polymer
+loaded, vanilla-item recipes; `bundleChunks` was not run with Polymer items): no run disconnected. Turn it on if a
+half-filled book on slow links, or the number of builds, matters more to you than one frame of roughly 200 to 300 ms on
+a slow client. Scenario G (unthrottled, direct) passed with every book in one frame and one tick, but that does not tell
+the two apart: loose chunks on the same loopback link were handled in one frame as well (42 of 42 books in B, C, E, J
+and the Java 25 run of B), and G's frame time was not measured. Also not measured: a GPU client, a 4 Mbit/s link with
+the real client (a protocol client's keep-alive there is under [Limitations](#limitations)), older clients through
+ViaBackwards, and a recipe screen open with search text while the book arrives (by the client code each chunk then waits
+for a full index build, and with a bundle all those waits would fall into the same frame; a headless model of the client
+gave 0.28 to 0.65 s in total for 9 chunks).
 
 ## How it works
 
@@ -420,6 +427,23 @@ the mod measured (its digest lines say 13445093 and 13445257; P0 without the mod
   (verification): E1v verified 9 of 9 packets in both books on four Java and Loader combinations, P4v 68 of 68 packets
   (4 books of 17 chunks) and PR2v 32 of 32 (4 books of 8), the last two with entries whose bare and in-context bytes
   differ; there was no ERROR from the mod, and no log has the mismatch text (`differ from a normal encode`).
+- **Polymer items together with ViaFabric or Velocity** (verification, the 1.1.0 jar, the P1 pack of the 400-item test
+  mod, the protocol client, each scenario run once, 0 failed assertions in all seven: PX1, PX1b, PX2 and PX2b with
+  ViaFabric 0.4.21+166 and a 26.1 or 26.2 client at compression 256 and off, PE6 and PE6b behind Velocity 4.2.0 with
+  FabricProxy-Lite 2.11.0 with the backend at compression 256 and off, PE6c with Velocity sending raw frames to the
+  client). The book is the one above: 2,987 entries on the give and 2,988 on relog, in 13 or 14 chunks of at most
+  1,048,559 bytes. Under ViaFabric the 26.1 client's translated chunks were as big as the server's (+0 bytes, PX1 and
+  PX2). The 26.2 client's book grew by 323 bytes (13,445,618 against 13,445,295 on the give, 13,445,631 against
+  13,445,308 on relog, at most +203 bytes in a chunk), which is 0.0024 %, against +25 % and +63 % for the worst-case
+  books of the ViaFabric section below. The largest frame was 61,539 bytes at compression 256 and 1,048,075 bytes with
+  compression off (1,049,076 bytes below the limit); nobody was disconnected. Behind Velocity the client got 13 or 14
+  chunks per book (two books in the last phase) with no disconnect in any phase. With the backend at compression off
+  Velocity took the raw frames (up to 1,048,299 bytes) and recompressed them (largest frame at the client 59,336 bytes),
+  and with `compression-threshold -1` (PE6c) the client got raw frames of at most 1,047,709 bytes. The `velocity.log` of
+  PE6c has one ERROR line, `Connection reset by peer`, at the moment the last client closed its connection; the server
+  logged an ordinary `Disconnected` and every assertion of that phase held. These books use vanilla items with Polymer's
+  names, lore and item models. Not run: PolyFactory, PolyDecorations or the player-bound items of P4 and P5 with
+  ViaFabric or behind Velocity, `bundleChunks` with Polymer items, and any real client with Polymer items.
 - Not tested: a Polymer client mod, a Polymer resource pack, other Polymer-based mods than PolyDecorations and
   PolyFactory.
 
@@ -442,10 +466,11 @@ clients:
 | 9.2 MB book, protocol 777 (26.3) | +709 bytes, but only with a locally patched ViaFabric 0.4.22+184 that is not distributed |
 
 - With the mod there was no disconnect in any ordinary scenario: compression 256 and off, budgets 1,048,576 and
-  2,000,000, with and without Polymer; chunk counts, entry counts and `replace` flags were the same as for the control
-  client, and no frame was over 2,097,151 bytes. The real 26.1 and 26.2 clients joined, got the split book on the give
-  and on relog, and stayed connected for 35 to 45 seconds with no disconnect or decode error in their logs. What their
-  recipe book contained was not inspected.
+  2,000,000, with the Polymer mod loaded or not, always with vanilla-item recipes (Polymer items are under
+  [Polymer](#polymer)); chunk counts, entry counts and `replace` flags were the same as for the control client, and no
+  frame was over 2,097,151 bytes. The real 26.1 and 26.2 clients joined, got the split book on the give and on relog,
+  and stayed connected for 35 to 45 seconds with no disconnect or decode error in their logs. What their recipe book
+  contained was not inspected.
 - Verification of the 1.1.0 jar (ViaFabric 0.4.21+166, the protocol client, Loader 0.19.5): VB0, VB0b, V1, V1b, V2, V2b,
   V5, VC, VW1, VW2 and VW3 passed on Java 25, and V1, VW1 and VC on Java 21. Only the two baselines without the mod were
   disconnected (VB0 `Packet too big (is 9227553 ...)`, VB0b `Packet too large: size 9227553 is over 8`). For the 9.2 MB
@@ -464,6 +489,7 @@ clients:
   shaded JvmDowngrader stub class is an empty class in `META-INF/versions/9` of the jar, and it still has no methods when
   loaded with plain `java -cp` and no Fabric Loader. Builds +168, +171, +173, +177, +180, +181 and +184 were tried and
   crash; +163 and +166 start. Only 9 of the 28 builds that list 1.21.11 were started. The kit pins 0.4.21+166.
+- Polymer items under translation: see [Polymer](#polymer) (PX1 to PX2b).
 - Not tested: ViaBackwards and older clients, recipe displays other than crafting recipes under translation, and a real
   26.3 client.
 
@@ -476,7 +502,8 @@ mod the same setup with compression on disconnects the player (`Packet too big`)
 Velocity on Temurin 25.0.4.1, backend Java 21 and, for E6 and E6b, also Java 25) E6, E6b, E6x, L2, L4, E8d and the real
 client D and K passed: chunks of at most 1 MiB (9 for the 9.2 MB book), no frame over 2,097,151 bytes (L2, Velocity with
 `compression-threshold -1`, raw frames: 1,048,313 bytes at most), and with `bundleChunks` (E8d, K) the bundle arrived
-intact. Other Velocity versions and other proxies were not tested.
+intact. Polymer items behind Velocity (PE6, PE6b, PE6c) are under [Polymer](#polymer). Other Velocity versions and other
+proxies were not tested.
 
 Velocity compresses on its own too, and it refuses a packet that compresses to more than 2 MiB (`The server sent a very
 large (over 2MiB compressed) packet`): with the backend uncompressed, a raw incompressible chunk of 2,097,147 bytes
@@ -575,15 +602,15 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
   Warm, the new jar is better: 46 ms (9 %) with compression 256, where deflate (about 400 ms) dominates the write and
   only the repeated chunk encode is saved, and 61 ms (44 %) with compression off. **The first give after a start is not
   faster with compression 256**, and not slower either: the medians of the eight first gives are 697.0 ms (1.1.0) and
-  723.0 ms (1.0.0), and the spread between runs of the same jar (630 to 900 ms) is larger than that difference. The
+  723.0 ms (1.0.0), and the spread between runs of the same jar (630 to 910 ms) is larger than that difference. The
   first three runs of each jar had looked worse for the new one (743.5, 661.8 and 716.9 ms against 632.9, 647.1 and
   723.9 ms); five more runs did not repeat it. What is slower on a cold JVM is the first measuring call, a median of
   210.5 ms against 179.5 ms with the 1.0.0 jar (and 63.0 against 58.5 ms warm), and the chunk encode that is saved
   cancels it. With compression off the first give was lower with the new jar too. In a unit-test pipeline (a scratch
   test, no compression, 4,457 entries, a fresh JVM for each of 8 samples) keeping the bytes did not make the first
   measuring call slower (median 168 ms, 140 to 213, against 188 ms, 129 to 239, without) and the first whole send was
-  faster with encode once (median 303 ms, 269 to 361, against 369 ms, 341 to 400, with reuse off), so the extra copy does
-  not explain the slower first measuring call on the server; what does is not established.
+  faster with encode once (median 303 ms, 269 to 361, against 369 ms, 341 to 400, with reuse off), so the extra copy
+  does not explain the slower first measuring call on the server; what does is not established.
 - **Memory.** The kept bytes are about as large as the entries of the book (9.2 MB for the test book), held in 256 KiB
   arrays until the task ends. The first array starts at 256 bytes and doubles, so a packet of one or a few entries keeps
   a few hundred bytes, not 256 KiB (see the cost per unlock above). There is no cap, so a bigger book needs that much heap for a moment
@@ -631,6 +658,25 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
   recipe packet in one fails as it does without the mod. A bundle whose sub-packets are not a `Collection` is left alone;
   Fabric API copies every bundle's sub-packets into a list, and without Fabric API this path has no test.
 - The extra encoding work described under Performance runs on a thread that other players share.
+- **A slow downlink can still time the player out, and no setting changes that.** Splitting sends the same bytes, and
+  the server's keep-alive queues behind them in the same connection. If a player's link needs longer than the server's
+  15 s keep-alive window to take the book, the player is disconnected with `Timed out`, with or without the mod's chunks
+  and with or without `bundleChunks`. Measured on the 9.2 MB test book (4,458 recipes in 9 chunks, 6.86 MB on the wire
+  at compression 256), with the protocol client behind `e2e/throttle.py` (verification, one run per rate; the raw
+  outputs are not in the repository):
+  - A book sent while the player is online (`recipe give`, `/reload`): the server sends a keep-alive every 15 s, and
+    the worst case is a keep-alive that falls right behind the start of the book, which was set up here. It arrived
+    about 7.6 s late at 8 Mbit/s, about 14.1 s late at 4 Mbit/s (no disconnect, under 1 s of margin) and about 18.8 s
+    late at 3 Mbit/s (`Tester lost connection: Timed out`). By arithmetic that worst case holds up to about 3.7 Mbit/s
+    (6.86 MB in 15 s), and at 3 Mbit/s only about one give in five meets it (the transfer takes 18 s, and a keep-alive
+    must fall in the first 3 s of it).
+  - A join: the first keep-alive is sent 15 s after the connection starts, so the book must take more than about 30 s to
+    time the player out. At 4 and 2.5 Mbit/s there was no disconnect, at 2 Mbit/s the first keep-alive arrived about
+    13.7 s late (no disconnect, about 1.3 s of margin), and at 1.8 and 1.6 Mbit/s the player timed out. The join limit
+    is about 1.8 Mbit/s for this book.
+
+  Both limits scale with the compressed size of the book (a book of twice the compressed bytes needs twice the rate).
+  Without the mod the same book is not sent at all (`Packet too big`).
 - Not tested: what a real 26.1 or 26.2 client shows in its recipe book, modded clients (a recipe-book mod may do work per
   packet), other proxies, Java versions between 21 and 25, other operating systems than Linux.
 
@@ -638,26 +684,35 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
 
 Every row of the verification of 1.1.0 was run with the release jar: the build and the 148 unit and integration tests on
 JDK 21 and 25, the benchmark, the core, bundle and limit scenarios, the Loader and Java combinations, the Polymer and
-ViaFabric scenarios, the latency scenarios, the real client A to K, and Loader 0.18.6. Every scenario passed. Two
-results are not passes: the benchmark has no pass criterion, and on JDK 25 its saving is smaller than expected (see
-[Performance](#performance)); and the rule for switching `bundleChunks` on was not met (frame time), so it stays off
-(see [bundleChunks](#bundlechunks)). Per-scenario results are in the status table of [e2e/README.md](e2e/README.md#status).
-What was not run or not measured:
+ViaFabric scenarios (with Polymer items too, PX1 to PE6c), the latency scenarios, the real client A to K, and Loader
+0.18.6. Every scenario passed. Two results are not passes: the benchmark has no pass criterion, and on JDK 25 its saving
+is smaller than expected (see [Performance](#performance)); and the rule for switching `bundleChunks` on was not met
+(frame time), so it stays off (see [bundleChunks](#bundlechunks)). Per-scenario results are in the status table of
+[e2e/README.md](e2e/README.md#status). What was not run or not measured:
 
 - Not run: L1, V3, V3b, V4 and VW3x need a budget above the ceiling 1,048,576 and cannot be expressed without a patched
   jar (their evidence is under [Chunk size bounds](#chunk-size-bounds)).
 - Not measured: the frame time of an unthrottled real client with `bundleChunks` (G passed, but the harness at that
-  commit had no frame timers and ran with the digest on), a GPU client, a 4 Mbit/s link, older clients through
-  ViaBackwards, and a recipe screen open with search text while the book arrives (see [bundleChunks](#bundlechunks)).
+  commit had no frame timers and ran with the digest on), a GPU client, a 4 Mbit/s link with the real client (the
+  protocol client's keep-alive at 4 Mbit/s is under [Limitations](#limitations)), older clients through ViaBackwards,
+  and a recipe screen open with search text while the book arrives (see [bundleChunks](#bundlechunks)).
 - Not established: why the first measuring call on a cold JVM is about 30 ms slower with 1.1.0 than with 1.0.0 (median
   210.5 against 179.5 ms, eight runs each; the saved chunk encode cancels it, see Performance).
-- Not covered by any run (see Limitations): Polymer items or ViaFabric with the real-client harness, real 26.x clients, a
-  modded client, proxies other than Velocity 4.2.0 with FabricProxy-Lite 2.11.0, other ViaFabric builds (the newer ones
-  do not start), Java versions between 21 and 25, operating systems other than Linux.
-- The two checks of the real-client harness have limits that the verification found: its F assertion passes on any
-  unexpected disconnect (the `NbtAccounterException` was read from the event log by hand), and the single-frame
-  assertion of G and K cannot tell bundled from loose delivery on a loopback link (see
-  [e2e/realclient](e2e/realclient/README.md)).
+- Not covered by any run of the 1.1.0 jar (see Limitations): Polymer items or ViaFabric with the real-client harness;
+  real 26.x clients (the 1.0.0 investigation joined real 26.1 and 26.2 clients through ViaFabric and they stayed
+  connected, but no 1.1.0 row used one and their recipe books were not inspected); Polymer items other than the 400 of
+  the test mod under ViaFabric or behind Velocity (PolyFactory, PolyDecorations and the player-bound items of P4 and P5
+  were not combined with either); `bundleChunks` with Polymer items; a modded client; proxies other than Velocity 4.2.0
+  with FabricProxy-Lite 2.11.0; other ViaFabric builds (the newer ones do not start); Java versions between 21 and 25;
+  operating systems other than Linux.
+- The verification found two weak checks in the real-client harness: its F assertion passed on any unexpected disconnect
+  (the `NbtAccounterException` was read from the event log by hand), and the single-frame assertion of G and K could not
+  tell bundled from loose delivery on a loopback link. Both have been tightened since (F now needs the exception, and
+  the chunk-count assertions now need the server's split lines to say `in one bundle` with `bundleChunks` and not to say
+  it without), and a digest line missing on either side now fails where it used to be skipped silently. The verification
+  runs used the older assertions; the stored events of 137 earlier runs pass the new ones, and A to G, J and K were run
+  again with the new `analyze.py` (all passed, see [e2e/realclient](e2e/realclient/README.md)). H and I with the new
+  assertions were not run again, only re-analysed.
 
 ## Building from source
 

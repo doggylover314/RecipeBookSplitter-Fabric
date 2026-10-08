@@ -31,7 +31,8 @@ wrapper):
 ./gradlew -p e2e/polytest-mod build --no-daemon  # P*, PV, PR*, PL*: e2e/polytest-mod/build/libs/rbs-polytest-1.0.0.jar
 ```
 
-Groups: `all` is every `E*` and `L*` scenario, `polymer` every `P*`, `via` every `V*`, `perf` every `X*`.
+Groups: `all` is every `E*` and `L*` scenario, `polymer` every `P*` (PX1 to PX2b also download ViaFabric, PE6 to PE6c need
+Velocity and a Java 25 JRE), `via` every `V*`, `perf` every `X*`.
 
 Needs: `bash`, `curl`, `python3` (3.8+), JDK 21+ for the server, about 3 GB of free memory, network access for the
 downloads, and disk space: about 0.5 GB for the cache and 150-260 MB for each scenario's server directory (measured on
@@ -153,6 +154,11 @@ the same book: bare codec, codec in the player's context, what the mod measured,
 | PR3 | both, `maxChunkBytes` 262,144 | as PR1 |
 | PL1 | as P1, phase 3: the client announces another language (`de_de`) 8 s after joining | Polymer resends the recipe book: two complete `replace=true` books in phase 3, both matched against the client |
 | PL2 | as PR2, phase 3 as in PL1 | as PL1; reports whether the `de_de` book differs from the `en_us` one |
+| PX1, PX1b | the P1 pack (Polymer items in recipes) + ViaFabric, compression 256, 26.1 / 26.2 client; the checker and phases are those of the ViaFabric scenarios (`check_via.py`) | as V1 / V1b, with the Polymer book: same chunk counts as the 774 control, no frame over 2,097,151 bytes; the growth by translation is printed |
+| PX2, PX2b | as PX1, PX1b with compression off | as V2 / V2b |
+| PE6 | the P1 pack behind Velocity 4.2.0 + FabricProxy-Lite (as E6), backend compression 256; the phases and checker of P1 | as P1 |
+| PE6b | as PE6, backend compression off (Velocity compresses for the client) | as P1 |
+| PE6c | as PE6b with Velocity's `compression-threshold -1`, so the client gets raw frames (like L2 with the Polymer book) | as P1; no frame over 2,097,151 bytes |
 
 ### ViaFabric (`check_via.py`)
 
@@ -165,7 +171,7 @@ growth by translation is printed per scenario.
 | ID | Setup | What is expected |
 |---|---|---|
 | VB0, VB0b | no Recipe Book Splitter, compression 256 / off, 26.1 client | the client is disconnected |
-| V1 | mod + ViaFabric + Polymer, compression 256, 26.1 client | as E1 for both clients; same chunk counts, entry counts and replace flags as the control |
+| V1 | mod + ViaFabric + Polymer loaded (recipes with vanilla items), compression 256, 26.1 client | as E1 for both clients; same chunk counts, entry counts and replace flags as the control |
 | V1b | V1 with a 26.2 client (two translation steps) | as V1 |
 | V2 | compression off | as V1 |
 | V2b | V2 with a 26.2 client | as V1 |
@@ -191,15 +197,15 @@ empty stub class inside the ViaFabric jar; see the main README).
 | X1b | X1 with compression off | as X1 |
 | X1c | X1 with `bundleChunks` | as X1 |
 
-The Prober sends a `ping_request` (answered on the server's Netty thread) every 10 ms, and `-Dio.netty.eventLoopThreads=1`
-makes all connections share one event-loop thread, so its round trips show how long that thread was busy. Besides the
-assertions the checker prints the Prober's slowest ping within 5 s after each give (median, p90, max) and the mod's
-measure and write times. With ten gives the p90 is the largest value, which is the first give after the start (a cold
-JVM, usually 100 ms or more above the others), so the checker prints that give apart from the other nine. There are no
-timing thresholds: compare jars by running the scenario with each (`RBS_JAR`), and compare the warm gives and the first
-one separately.
-With the 1.0.0 jar the new config keys give two harmless `unknown config key` WARNs, and the split lines carry no write
-time.
+The Prober sends a `ping_request` (answered on the server's Netty thread) every 10 ms, and
+`-Dio.netty.eventLoopThreads=1` makes all connections share one event-loop thread, so its round trips show how long that
+thread was busy. Besides the assertions the checker prints the Prober's slowest ping within 5 s after each give (median,
+p90, max) and the mod's measure and write times. With ten gives the p90 is the largest value, which is the first give
+after the start (a cold JVM, usually 100 ms or more above the others), so the checker prints that give apart from the
+other nine (their median and maximum: of nine values the p90 would only repeat the maximum). There are no timing
+thresholds: compare jars by running the scenario with each (`RBS_JAR`), and compare the warm gives and the first one
+separately. With the 1.0.0 jar the new config keys give two harmless `unknown config key` WARNs, and the split lines
+carry no write time.
 
 ## Files
 
@@ -269,15 +275,16 @@ Which jar each result comes from. "1.0.0" is the investigation that preceded 1.1
 harnesses that are now in this kit (same scenario ids unless a row says otherwise; the logs are not in the repository).
 
 "Verification" is a run of this kit against the release jar `recipebooksplitter-1.1.0.jar`, SHA-256
-`24a82085e4ad49bb3894b25624f854ae943610d368d152d4883a153d6cfc249f` (`./gradlew build` on JDK 21.0.11 from the main code of
-commit `1b87fb7`; the later commits changed only this kit and the documentation, and builds from them give the same jar).
-Unless a cell says otherwise: server on Java 21.0.11, Fabric Loader 0.19.5, Fabric API 0.141.6 and Polymer 0.15.2 (loaded
-in all of them except where a row says otherwise), the protocol client, Velocity 4.2.0 with FabricProxy-Lite 2.11.0 on
-the pinned Temurin 25.0.4.1 JRE for the proxy scenarios, a private copy of the download cache, each scenario run once (unless
-a row says otherwise) and passing on its first run, on a 4-CPU VM that another job shared (so timings carry noise). The test mods were
-`rbs-e2e-testmod-0.0.1.jar` (SHA-256 `3514a4424101...`) and `rbs-polytest-1.0.0.jar` (`9b7481dcca0b...`). The server
-logs of these runs have one ERROR line, `No key layers in MapLike[{}]`, at the creation of the flat world; it is also
-there without the mod (E0, P0) and does not come from it.
+`24a82085e4ad49bb3894b25624f854ae943610d368d152d4883a153d6cfc249f` (`./gradlew build` on JDK 21.0.11 from the main code
+of commit `1b87fb7`; the later commits changed only this kit, the documentation and a comment in `ConnectionMixin.java`,
+and builds from them give the same jar). Unless a cell says otherwise: server on Java 21.0.11, Fabric Loader 0.19.5,
+Fabric API 0.141.6 and Polymer 0.15.2 (loaded in all of them except where a row says otherwise), the protocol client,
+Velocity 4.2.0 with FabricProxy-Lite 2.11.0 on the pinned Temurin 25.0.4.1 JRE for the proxy scenarios, a private copy
+of the download cache, each scenario run once (unless a row says otherwise) and passing on its first run, on a 4-CPU VM
+that another job shared (so timings carry noise). The test mods were `rbs-e2e-testmod-0.0.1.jar` (SHA-256
+`3514a4424101...`) and `rbs-polytest-1.0.0.jar` (`9b7481dcca0b...`). The server logs of these runs have one ERROR line,
+`No key layers in MapLike[{}]`, at the creation of the flat world; it is also there without the mod (E0, P0) and does
+not come from it.
 
 | Scenarios | 1.0.0 jar | 1.1.0 (verification) |
 |---|---|---|
@@ -286,9 +293,10 @@ there without the mod (E0, P0) and does not come from it.
 | E8 to E9s | a prototype of the bundle and undeliverable-entry code (not the 1.0.0 jar) passed E8, E8b, E8x, E9, E9b and E9s | E8, E8b, E8x, E8c, E8d, E8e, E9, E9b and E9s passed. E8, E8b, E8e: a bundle with 3,000 entries (9,111,004 bytes) was split in place into 9 chunks, largest 1,047,769 bytes, as one bundle remove, add x 9, remove, nothing nested. E8x: `Packet too big (is 9111004 ...)`. E8c: the 9 chunks of the give and of the relog arrive in one bundle that holds nothing else (E8d behind Velocity, E8d also with a Java 25 backend: the same, the bundle survives the proxy). E9: two entries (3,000,040 and 3,000,041 bytes) left out with compression off, the client stays connected. E9b: the 3 MB random entry and the 9 MB entry left out, the 4.5 MB entry of zeros sent alone with a WARN. E9s: `sending it anyway`, the client was disconnected (`Packet too large: size 3000040 is over 8`) |
 | L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs, and L1 (1,500,000, compression off) is E2 now | L2 to L6 passed; L1 was not run: it needs a budget above the ceiling, which the jar no longer accepts (E2 and the clamp in L6 and E7d cover it). L2: largest packet = frame, 1,048,106 bytes (give) and 1,048,313 (relog), raw. L3: 42 entries of 261 KB, the give (1,499 entries) in 11 chunks, largest 1,044,199 bytes, frame 1,044,528; the relog (1,500 entries) in 13 chunks, largest 1,048,574 bytes, frame 1,047,105. L4: largest 1,044,199 bytes (client frame 1,044,298) on the give and 1,048,554 on the relog (frame 1,047,075). L5: 36 chunks on the give (37 packets at the client with the one-entry join packet) and 36 on the relog, largest 262,095 and 262,039 bytes. L6: the WARN of E7d, the budget 1,048,576 |
 | P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3), with other parameters than the kit uses now: P2 and PR3 at `maxChunkBytes` 65,536 (the kit: 262,144, the new minimum), P3 with fat recipes of two large tags (the kit: four, `--fat-tags 4`) and P5 at 2,000,000 (the kit: 1,048,576, the ceiling). A mutant of the mod that sizes with the bare codec was run on P1, P4, P5 and PR2 (R2): P1 passed, P4, P5 and PR2 failed; PR3 was only computed | P0, P1, P1b, P2, P3, P4, P4v, P5, P6, P7, PV, PR1, PR2, PR2v, PR3, PL1 and PL2 passed with the kit's parameters (Java 21), and P1, P4, PR2 and PL2 again on Java 25 with Loader 0.19.0. P0: `Packet too big (is 13445093 ...)` on the give, `(is 13445257 ...)` after. P1: 2,988 recipes, 13,445,253 entry bytes, bare codec = in-context = what the client got, 13 or 14 chunks (largest 1,047,709 to 1,048,545). P2: 56 chunks at 262,144; P3: 63 chunks, 6 fat entries of 314,400 to 314,700 bytes sent alone with a WARN each. P4, P5: bare 13,445,253 against in-context 17,130,428 bytes, 17 chunks (largest 1,046,656 to 1,048,029); the mod's digest equals the in-context bytes. P4v: 68 of 68 packets and PR2v: 32 of 32 verified, no mismatch. P6: the join and the `/reload` each sent the full book (2,988 recipes, 14 chunks). P7: Polymer's chunk of 12,179,083 bytes became 12 chunks, no packet over 1,045,678 bytes. PV: 237,456 entry bytes. PR1: 1,702 recipes, 291,928 bytes, not split. PR2: bare 6,063,836 against in-context 8,053,797 bytes, 8 chunks. PR3: 35 chunks, largest 261,812. The checkers compute the plan on the bare sizes for P4/P5, PR2 and PR3: 13, 6 and 27 chunks whose true largest is 1,336,404, 1,398,482 and 347,466 bytes, over the budget (arithmetic). PL1, PL2: the language change resent the book 0.926 s and 0.586 s after the announcement, byte-identical to the first (PL2: the `de_de` book equals the `en_us` one) |
+| PX1 to PX2b, PE6 to PE6c | not run | PX1, PX1b, PX2, PX2b, PE6, PE6b and PE6c passed (55 assertions for each PX, 69 for each PE; the jar `24a82085e4ad...`, ViaFabric 0.4.21+166 (SHA-256 `aa0e19d92991...`), Java 21.0.11, Loader 0.19.5, a private copy of the cache). The book is P1's: 2,987 entries on the give (13,445,093 bytes) and 2,988 on relog (13,445,257 bytes), 13 or 14 chunks, the largest chunk 1,047,709 to 1,048,559 bytes. PX1, PX2 (26.1): the translated chunks equal the server's (+0 bytes), largest frame 60,700 (PX1) and 1,048,075 (PX2). PX1b, PX2b (26.2): +323 bytes on the give (13,445,618 against 13,445,295; at most +203 in a chunk) and on relog (13,445,631 against 13,445,308), largest frame 61,539 and 1,047,709. PE6, PE6b: no disconnect, the largest chunk at the client 1,048,559 (PE6) and 1,048,299 bytes (PE6b), largest frame at the client 59,336 (Velocity compresses). PE6c: raw frames at the client, the largest 1,047,709 bytes; `velocity.log` has one `Connection reset by peer` ERROR when the last client closed its connection, the server saw an ordinary `Disconnected` |
 | VB0 to VW3 | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit had V3, V3b and V4 at 1,500,000 instead; they are not in the kit any more, and V2b, the 26.2 client with compression off at the default, is new). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | ViaFabric 0.4.21+166 (SHA-256 `aa0e19d92991...`): VB0, VB0b, V1, V1b, V2, V2b, V5, VC, VW1, VW2 and VW3 passed on Java 25 / Loader 0.19.5, and V1, VW1 and VC on Java 21. V3, V3b and V4 were not run: they are not defined in the kit (they ran at 1,500,000). VB0: `Packet too big (is 9227553 ...)`, VB0b: `Packet too large: size 9227553 is over 8`. V1, V2, V5 (26.1): translated chunks equal the server's (1.0000), largest frame 784,945 (V1), 1,048,433 (V2), 786,062 (V5). V1b, V2b (26.2): +323 bytes (9,228,072 against 9,227,749), largest frame 785,462 and 1,048,520. VC: 60 of 60, all 9 chunks of every book in one bundle at the 775 client (packet ids [0, 74]; the 774 control [0, 72, 73]), largest frame 785,825. VW1: +25.3 % (5,597,058 against 4,468,135 bytes, 5 chunks), largest translated chunk 1,318,277 bytes, largest frame 1,318,277 (Java 21 and 25), not disconnected. VW2: the WARN and two INFOs, the same sizes. VW3: +61.7 % (7,652,212 against 4,732,811 bytes), largest translated chunk and frame 1,706,228 bytes (give) and 1,695,742 (relog), not disconnected |
 | X1 to X1c | not run as scenarios (the per-split times were measured with probe timers) | verification (jar `24a82085e4ad...` against the 1.0.0 jar, JDK 21.0.11, Loader 0.19.5; X1 eight runs of each jar, three of the verification lane and five of a rerun in a fresh clone of commit `4b39263`; X1b three runs of each; X1c three runs of the new jar; all passed, no ping unanswered, every new-jar split line `reused for 9 of 9 packets`): the slowest ping within 5 s after a give, median of all gives (of the warm gives, those after the first of a run) in ms: X1 533.4 (518.2) with 1.0.0, 479.7 (472.6) with 1.1.0; X1b 143.1 (139.0) and 80.9 (77.6); X1c, 1.1.0 only, 485.4 (477.3). The first give of a run, on a cold JVM, is not faster with compression 256 and not slower either: medians 723.0 (1.0.0) and 697.0 ms (1.1.0) over 8 runs, spread 630 to 910 ms; with compression off it was lower (3 runs). More in the main README under Performance |
-| `realclient` A to K | A 3 of 3, B 23 of 23, C 23 of 23, D 13 of 13, E 13 of 13, F 2 of 2 assertions; B and C three times each (the harness then had scenarios A to F only) | A, B, C, D, E, F, G, J and K passed on the first run (3, 13, 13, 23, 13, 2, 15, 13 and 15 assertions), 14 repeats with three relogs (B, C, D, E, G, J and K, twice each; 23, 27 or 13 assertions) passed too, and so did B and D on Java 25 with Loader 0.19.0 (two runs each): 27 runs. H and I at 8000 and 20000 kbit/s and K: 60 runs with the digest off (11 assertions for H, 13 for I and K) and 22 with it on (13, 15, 15), all passed, no disconnect, every book of I and K in one frame and one tick; numbers in the main README under `bundleChunks` and in `realclient/README.md` |
+| `realclient` A to K | A 3 of 3, B 23 of 23, C 23 of 23, D 13 of 13, E 13 of 13, F 2 of 2 assertions; B and C three times each (the harness then had scenarios A to F only) | A, B, C, D, E, F, G, J and K passed on the first run (3, 13, 13, 23, 13, 2, 15, 13 and 15 assertions), 14 repeats (B, C, D, E, G and K with three relogs, J again with its `/reload` and no relog, twice each; 23, 27 or 13 assertions) passed too, and so did B and D on Java 25 with Loader 0.19.0 (two runs each): 27 runs. H and I at 8000 and 20000 kbit/s and K: 60 runs with the digest off (11 assertions for H, 13 for I and K) and 22 with it on (13, 15, 15), all passed, no disconnect, every book of I and K in one frame and one tick; numbers in the main README under `bundleChunks` and in `realclient/README.md`. A, B, C, D, E, F, G, J and K were run once more with the client sources of `4b39263` and the stricter `analyze.py` (default `RELOGS`, digest on): all passed first time (3, 13, 13, 13, 13, 2, 15, 13 and 15 assertions) |
 
 The build and the benchmark are not kit scenarios; their results (148 tests on JDK 21 and 25, the benchmark on both) are in
 the main README under Building from source and Performance. What was not run or not measured is under "Verification gaps"
@@ -302,5 +310,7 @@ there.
   script (joined, split book on give and relog, no disconnect), and did not inspect their recipe books.
 - No ViaBackwards (older clients), and no proxy other than Velocity 4.2.0 with FabricProxy-Lite.
 - Polymer items are covered for vanilla clients only: no Polymer client mod, no resource pack, and the protocol client's
-  default language and client options (except PL1 and PL2, which announce `de_de`).
+  default language and client options (except PL1 and PL2, which announce `de_de`). Under ViaFabric and behind Velocity
+  only the 400 items of the test mod were run (PX1 to PE6c); PolyFactory, PolyDecorations and the player-bound items
+  of P4 and P5 were not combined with either, and no `bundleChunks` scenario uses Polymer items.
 - No modded client, no operating system other than Linux, and no Java other than 21 and 25.
