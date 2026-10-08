@@ -224,32 +224,34 @@ otherwise the chunks go out loose, with a DEBUG line that says why.
 
 What a real client showed (verification; vanilla 1.21.11 client on Xvfb with software rendering, capped at 20 fps; the
 9.2 MB book in 9 chunks at 1 MiB, compression 256; the client's entry digest off, because it runs inside the frame; the
-medians of three runs; "give" is `recipe give Tester *`, "relog" the initial book of a later join). H and I limit the
-server-to-client link to 8 or 20 Mbit/s, without and with `bundleChunks`; K is `bundleChunks` behind Velocity, with no
-loose twin:
+medians of six runs, three from the verification lane and three from a rerun in a fresh clone of commit `4b39263`, same
+jar; "give" is `recipe give Tester *`, "relog" the initial book of a later join). H and I limit the server-to-client
+link to 8 or 20 Mbit/s, without and with `bundleChunks`; K is `bundleChunks` behind Velocity, with no loose twin:
 
 | Run | bundleChunks | Ticks from the first chunk to the last, give / relog | Search builds scheduled and run, give; relog | Slowest frame that handled book packets, give / relog | Background CPU of the builds, give / relog |
 |---|---|---|---|---|---|
-| H, 8 Mbit/s | off | 129 / 130 | 9 and 9; 10 and 10 | 95 / 124 ms | 631 / 506 ms |
-| I, 8 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 190 / 188 ms | 662 / 311 ms |
-| H, 20 Mbit/s | off | 54 / 55 | 9 and 9; 10 and 10 | 114 / 144 ms | 687 / 518 ms |
-| I, 20 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 265 / 223 ms | 568 / 264 ms |
-| K, Velocity | on | 0 / 0 | 9 and 4; 10 and 6 | 263 / 232 ms | 533 / 355 ms |
+| H, 8 Mbit/s | off | 128 / 130 | 9 and 9; 10 and 10 | 94 / 125 ms | 642 / 531 ms |
+| I, 8 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 227 / 187 ms | 709 / 339 ms |
+| H, 20 Mbit/s | off | 54 / 55 | 9 and 9; 10 and 10 | 113 / 148 ms | 663 / 529 ms |
+| I, 20 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 264 / 224 ms | 608 / 357 ms |
+| K, Velocity | on | 0 / 0 | 9 and 4; 10 and 6 | 249 / 227 ms | 623 / 311 ms |
 
-All 30 runs (15 with the client's digest off, as in the table, and 15 with it on) passed their assertions (the
-client's recipe book equals what the server sent, one packet per chunk, `replace` only on the first; with the digest on
-the entry hashes equal the server's) with no disconnect, and with the bundle the book was handled in one frame and one
-tick every time. So the benefit is real and small: instead of 54 to 131 ticks (2.7 to 6.5 s) with a part of the book,
-the book appears at once, and 4 or 6 builds run instead of 9 or 10, at about the same or less background CPU. The cost
-is that the frame that handles all the packets takes 1.5 to 2.3 times as long as the slowest frame with loose chunks
-(190 to 265 ms against 95 to 144 ms): a bundle puts the handlers of all 9 chunks into one frame, 72 ms of packet
-handling in the slowest frame of I at 8 Mbit/s (give) and 160 ms at 20 Mbit/s against 19 ms in the slowest frame of H
-at 8 Mbit/s, and the rest of such a frame is mostly rendering; loose chunks spread the handlers over 9 frames. The
+All 48 runs (31 with the client's digest off, as in the table, and 17 with it on) passed their assertions (the client's
+recipe book equals what the server sent, one packet per chunk, `replace` only on the first; with the digest on the entry
+hashes equal the server's) with no disconnect, and with the bundle the book was handled in one frame and one tick every
+time. So the benefit is real and small: instead of 54 to 131 ticks (2.7 to 6.5 s) with a part of the book, the book
+appears at once, and 4 to 6 builds run instead of 9 or 10, at about the same (+10 % in one case) or less background CPU.
+The cost is that the frame that handles all the packets takes 1.5 to 2.4 times as long as the slowest frame with loose
+chunks (187 to 264 ms against 94 to 148 ms): a bundle puts the handlers of all 9 chunks into one frame, 76 ms of packet
+handling in the slowest frame of I at 8 Mbit/s (give) and 154 ms at 20 Mbit/s against 19 ms in the slowest frame of H at
+8 Mbit/s, and the rest of such a frame is mostly rendering; loose chunks spread the handlers over 9 frames. The
 keep-alive margin did not change: the book needs the same time to arrive with and without the bundle (6.47 s at
 8 Mbit/s and 2.75 s at 20 Mbit/s, which leaves 8.5 s and 12.2 s of the server's 15 s keep-alive window), and with the
 digest off keep-alive packets reached the client with at most 8 ms of delay. Frame times need the digest off: a client
 that also computes it (it re-encodes the entries inside the frame that handles them) measured slowest frames up to
-2.7 times higher (I at 8 Mbit/s, give: 512 against 190 ms; see [e2e/realclient](e2e/realclient/README.md)).
+3.1 times higher (I at 8 Mbit/s, give: 512 against 190 ms in the verification lane, 703 ms in a single digest-on run of
+the rerun against 227 ms for the six digest-off runs, with 590 ms of packet handling in that frame; see
+[e2e/realclient](e2e/realclient/README.md)).
 
 The default stays `false`: the rule for switching it on was fewer builds and no half-filled book at no worse maximum
 frame time, and the frame time is worse. Switch it on if a half-filled book or the number of builds matters more to
@@ -463,37 +465,40 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
   `-Drecipebooksplitter.debugDigest=true`, which also hashes the entries), and writing the 9 chunks 473 to 483 ms, 80 %
   of it deflate. The first split after a start took 0.29 to 0.64 s on a loaded VM (a cold JVM needs about 250 to 300 ms
   for the first measuring call alone). Polymer books of 8 to 17 MB took 0.6 to 1.8 s warm and 1.9 to 4.9 s for the first
-  measurement after a start (debug digest on). With 1.1.0 (verification, scenarios X1 and X1b, three runs of ten gives,
-  digest off) measuring took a median of 65 ms on the warm gives (2 to 10) against 58 ms with the 1.0.0 jar: keeping the
-  bytes costs about 7 ms. Writing took 422 ms with compression 256 (almost all deflate) and 8 ms with compression off
-  (the 1.0.0 jar logs no write time).
+  measurement after a start (debug digest on). With 1.1.0 (verification, scenario X1, eight runs of ten gives, digest
+  off) measuring took a median of 63 ms on the warm gives (2 to 10) against 58.5 ms with the 1.0.0 jar: keeping the
+  bytes costs about 5 ms. Writing took 402 ms with compression 256 (almost all deflate) and, in X1b with three runs,
+  8 ms with compression off (the 1.0.0 jar logs no write time).
 - **Other players.** The task runs on the connection's Netty thread, and other connections on that thread wait while it
   runs; the server thread is not blocked. In the 1.0.0 runs the whole task took about 0.55 to 0.6 s warm and 1.1 to
   2.6 s in the worst cold, loaded case. How long a second player waits was measured with X1 (compression 256), X1b
   (compression off) and X1c (X1 with `bundleChunks`): a second player, the Prober, pings every 10 ms while ten
   `recipe take`/`recipe give` cycles run, and all connections share one event loop thread
-  (`-Dio.netty.eventLoopThreads=1`). The table is the slowest ping within 5 s after a give (verification; three runs of
-  ten gives for each jar, so 30 gives; none of the pings went unanswered; "warm" is the 27 gives that were not the first
-  of a run); the 1.0.0 jar has SHA-256 `dbd1226840c4...`:
+  (`-Dio.netty.eventLoopThreads=1`). The table is the slowest ping within 5 s after a give (verification; X1 eight runs
+  of ten gives for each jar, three from the verification lane and five from a rerun in a fresh clone of commit
+  `4b39263`, same jars; X1b and X1c three runs; no ping went unanswered in any run; "warm" is every give but the first
+  of a run; the 1.0.0 jar has SHA-256 `dbd1226840c4...`):
 
-  | Scenario | Jar | All 30 gives, median | Warm gives, median / p90 / max | The first give of each run |
+  | Scenario | Jar | All gives, median | Warm gives, median / p90 / max | The first give of each run, sorted |
   |---|---|---|---|---|
-  | X1, compression 256 | 1.0.0 | 545.7 ms | 523.3 / 589.1 / 631.5 ms | 632.9, 647.1, 723.9 ms |
-  | X1, compression 256 | 1.1.0 | 495.1 ms | 489.6 / 553.2 / 571.4 ms | 743.5, 661.8, 716.9 ms |
+  | X1, compression 256 | 1.0.0 | 533.4 ms | 518.2 / 589.1 / 703.6 ms | 632.9, 647.1, 662.3, 722.0, 723.9, 725.5, 852.9, 896.9 ms |
+  | X1, compression 256 | 1.1.0 | 479.7 ms | 472.6 / 532.4 / 571.4 ms | 656.2, 657.0, 661.8, 677.1, 716.9, 727.3, 743.5, 910.2 ms |
   | X1b, compression off | 1.0.0 | 143.1 ms | 139.0 / 177.4 / 202.9 ms | 260.0, 303.1, 314.7 ms |
-  | X1b, compression off | 1.1.0 | 80.9 ms | 77.6 / 108.6 / 132.5 ms | 231.2, 193.3, 279.5 ms |
-  | X1c, compression 256, `bundleChunks` | 1.1.0 | 485.4 ms | 477.3 / 543.9 / 589.4 ms | 659.9, 605.7, 648.0 ms |
+  | X1b, compression off | 1.1.0 | 80.9 ms | 77.6 / 108.6 / 132.5 ms | 193.3, 231.2, 279.5 ms |
+  | X1c, compression 256, `bundleChunks` | 1.1.0 | 485.4 ms | 477.3 / 543.9 / 589.4 ms | 605.7, 648.0, 659.9 ms |
 
-  Warm, the new jar is better: 34 ms (6 %) with compression 256, where deflate (about 420 ms) dominates the write and
+  Warm, the new jar is better: 46 ms (9 %) with compression 256, where deflate (about 400 ms) dominates the write and
   only the repeated chunk encode is saved, and 61 ms (44 %) with compression off. **The first give after a start is not
-  faster with compression 256**: its stall was 743.5, 661.8 and 716.9 ms against 632.9, 647.1 and 723.9 ms, and the
-  first measuring call took 255, 208 and 213 ms against 157, 182 and 177 ms (with compression off the first give was
-  lower with the new jar, as the warm ones). Three runs cannot separate a real cold-start cost from the spread of fresh
-  JVMs (the gap per run was +110.6, +14.7 and -7.0 ms). In a unit-test pipeline (a scratch test, no compression, 4,457
-  entries, a fresh JVM for each of 8 samples) keeping the bytes did not make the first measuring call slower (median
-  168 ms, 140 to 213, against 188 ms, 129 to 239, without) and the first whole send was faster with encode once (median
-  303 ms, 269 to 361, against 369 ms, 341 to 400, with reuse off), so the extra copy does not explain the slower first
-  measuring call on the server; what does is not established.
+  faster with compression 256**, and not slower either: the medians of the eight first gives are 697.0 ms (1.1.0) and
+  723.0 ms (1.0.0), and the spread between runs of the same jar (630 to 900 ms) is larger than that difference. The
+  first three runs of each jar had looked worse for the new one (743.5, 661.8 and 716.9 ms against 632.9, 647.1 and
+  723.9 ms); five more runs did not repeat it. What is slower on a cold JVM is the first measuring call, a median of
+  210.5 ms against 179.5 ms with the 1.0.0 jar (and 63.0 against 58.5 ms warm), and the chunk encode that is saved
+  cancels it. With compression off the first give was lower with the new jar too. In a unit-test pipeline (a scratch
+  test, no compression, 4,457 entries, a fresh JVM for each of 8 samples) keeping the bytes did not make the first
+  measuring call slower (median 168 ms, 140 to 213, against 188 ms, 129 to 239, without) and the first whole send was
+  faster with encode once (median 303 ms, 269 to 361, against 369 ms, 341 to 400, with reuse off), so the extra copy does
+  not explain the slower first measuring call on the server; what does is not established.
 - **Memory.** The kept bytes are about as large as the entries of the book (9.2 MB for the test book), held in 256 KiB
   arrays until the task ends. The first array starts at 256 bytes and doubles, so a packet of one or a few entries keeps
   a few hundred bytes, not 256 KiB (see the cost per unlock above). There is no cap, so a bigger book needs that much heap for a moment

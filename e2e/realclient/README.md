@@ -118,10 +118,11 @@ Xvfb with Mesa 25.2.8 llvmpipe, OpenGL 4.5, vanilla 1.21.11 client, offline mode
   84.5 ms for the first book of a run and 28.3 ms for later joins, 145 chunks 634.9 ms and 110.9 ms (143 chunks). Of the
   145 background search-tree builds scheduled for the first book, 20 to 23 ran.
 
-With the 1.1.0 jar (verification: jar SHA-256 `24a82085e4ad...`, server on JDK 21.0.11 with Loader 0.19.5, three runs of
-each): H and I at 8000 and at 20000 kbit/s and K passed their assertions, with the digest off
-(11 assertions for H, 13 for I and K) and with it on (13, 15 and 15, which add the comparison of the client's entry hashes
-with the server's digest) and with no disconnect; the single-frame assertion of I and K held in every run (every book in
+With the 1.1.0 jar (verification: jar SHA-256 `24a82085e4ad...`, server on JDK 21.0.11 with Loader 0.19.5; three runs of
+each in the verification lane and three more in a fresh clone of commit `4b39263`): H and I at 8000 and at 20000 kbit/s
+and K passed their assertions, with the digest off (11 assertions for H, 13 for I and K) and with it on (13, 15 and 15,
+which add the comparison of the client's entry hashes with the server's digest; three runs of each in the lane, one of H
+and one of I in the rerun) and with no disconnect; the single-frame assertion of I and K held in every run (every book in
 one frame and one tick), so the frame and tick counter and the frame timers have run. Numbers are in the main README under
 `bundleChunks`. `TBD(verify)`: A to G and J (`/reload`).
 
