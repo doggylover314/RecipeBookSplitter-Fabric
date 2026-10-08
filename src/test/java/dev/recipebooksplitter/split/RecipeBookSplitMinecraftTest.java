@@ -400,7 +400,7 @@ class RecipeBookSplitMinecraftTest {
         }
         long perCall = (threads.getCurrentThreadAllocatedBytes() - before) / rounds;
 
-        // About 10 KB with the 4 KiB first segment (the three probe encodes and their buffers are most of it).
+        // The three probe encodes and their buffers are most of it; the first kept segment is 256 bytes.
         assertTrue(perCall < 64 * 1024, perCall + " bytes allocated per measured one-entry packet");
     }
 }

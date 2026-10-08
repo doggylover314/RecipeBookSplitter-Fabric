@@ -124,6 +124,7 @@ class EncodedEntriesTest {
         byte[] entry = entryBytes(0, 100);
         append(one, entry);
         assertEquals(EncodedEntries.FIRST_SEGMENT_BYTES, one.capacityBytes());
+        assertTrue(one.capacityBytes() <= 512, "a 100-byte entry is kept in " + one.capacityBytes() + " bytes of storage");
         assertTrue(EncodedEntries.FIRST_SEGMENT_BYTES * 16 <= EncodedEntries.SEGMENT_BYTES);
 
         ByteBuf out = Unpooled.buffer();

@@ -11,7 +11,7 @@ import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.Configurator;
 import org.apache.logging.log4j.core.config.Property;
 
-/** Records what a logger logs while open (at DEBUG and above), so tests can assert on log output. */
+/** Records what a logger logs while open (at DEBUG and above unless another level is given), so tests can assert on log output. */
 public final class LogCapture implements AutoCloseable {
     public record Entry(Level level, String message) {}
 
@@ -26,9 +26,14 @@ public final class LogCapture implements AutoCloseable {
     };
 
     public LogCapture(String loggerName) {
+        this(loggerName, Level.DEBUG);
+    }
+
+    /** @param level the level the logger is set to while open, for example INFO as on a production server */
+    public LogCapture(String loggerName, Level level) {
         this.loggerName = loggerName;
         previousLevel = LogManager.getLogger(loggerName).getLevel();
-        Configurator.setLevel(loggerName, Level.DEBUG);
+        Configurator.setLevel(loggerName, level);
         LoggerContext context = (LoggerContext) LogManager.getContext(false);
         Configuration config = context.getConfiguration();
         appender.start();

@@ -14,6 +14,8 @@ import dev.recipebooksplitter.testutil.TestConfigs;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.ArrayList;
 import java.util.List;
@@ -156,6 +158,56 @@ class ConnectionSplitIntegrationTest {
 
         assertEquals(written, channel.outboundMessages().size());
         assertSameEntries(entries, addPackets(readFrames(channel)));
+    }
+
+    /** Counts the flushes that travel down the pipeline. Added last, so it sees what the connection sends first. */
+    private static final class FlushCounter extends ChannelOutboundHandlerAdapter {
+        final AtomicInteger flushes = new AtomicInteger();
+
+        @Override
+        public void flush(ChannelHandlerContext ctx) {
+            flushes.incrementAndGet();
+            ctx.flush();
+        }
+    }
+
+    /** The flush of the original send applies to the last chunk only: one syscall for the whole book, not one per chunk. */
+    @Test
+    void flushTrueFlushesOnceForTheWholeSplitPacket() {
+        FlushCounter counter = new FlushCounter();
+        channel.pipeline().addLast("flushCounter", counter);
+
+        connection.send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true), null, true);
+        channel.runPendingTasks();
+
+        assertTrue(recorder.messages.size() > 1, "split into " + recorder.messages.size());
+        assertEquals(1, counter.flushes.get(), "one flush for " + recorder.messages.size() + " chunks");
+    }
+
+    @Test
+    void flushTrueWithListenerFlushesOnceForTheWholeSplitPacket() {
+        FlushCounter counter = new FlushCounter();
+        channel.pipeline().addLast("flushCounter", counter);
+        AtomicInteger listenerCalls = new AtomicInteger();
+
+        connection.send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true), future -> listenerCalls.incrementAndGet(), true);
+        channel.runPendingTasks();
+
+        assertTrue(recorder.messages.size() > 1);
+        assertEquals(1, counter.flushes.get(), "one flush for " + recorder.messages.size() + " chunks");
+        assertEquals(1, listenerCalls.get());
+    }
+
+    @Test
+    void flushFalseNeverFlushesWhileSplitting() {
+        FlushCounter counter = new FlushCounter();
+        channel.pipeline().addLast("flushCounter", counter);
+
+        connection.send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true), null, false);
+        channel.runPendingTasks();
+
+        assertTrue(recorder.messages.size() > 1);
+        assertEquals(0, counter.flushes.get());
     }
 
     @Test

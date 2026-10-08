@@ -83,7 +83,7 @@ lines; and, unless the row says otherwise, the split lines say that the measured
 | E7a | no config file, one phase | the default config file with the five keys is created; the loaded line shows the defaults |
 | E7b | `{"maxChunkBytes": 10}` | WARN that 10 is below the minimum 262144; the budget is 262,144 and respected; the file is not changed |
 | E7c | `{"maxChunkBytes": ` (malformed) | ERROR that the config cannot be read; defaults used; the file is not changed |
-| E7d | a 1.0.0 file with `maxChunkBytes` 2,000,000 and without the new keys | WARN that 2,000,000 is above the maximum 1500000; an INFO for each missing new key; the file is not changed |
+| E7d | a 1.0.0 file with `maxChunkBytes` 2,000,000 and without the new keys | WARN that 2,000,000 is above the maximum 1500000 (with the advice to keep the default under ViaVersion without compression); an INFO for each missing new key; the file is not changed |
 | E7e | `{"undeliverableEntries": "SEND", "bundleChunks": "yes"}` | a WARN for each; the loaded line shows `drop` and `false`; the file is not changed |
 
 ### Bundles and entries a connection cannot send (the test mod, `e2e/testmod`)
@@ -111,7 +111,7 @@ scenarios have no data pack.
 | L3 | an incompressible payload (42 entries of about 244 KB), 1,500,000, compression 256 | as E1; no frame over 2,097,151 bytes |
 | L4 | L3 data, backend compression off, behind Velocity with `compression-threshold 256` | as E1 |
 | L5 | `maxChunkBytes` 262,144 (the minimum) | as E1; the chunk count is printed |
-| L6 | config `{"maxChunkBytes": 4000000}` | WARN that it is above the maximum 1500000; the budget is 1,500,000 |
+| L6 | config `{"maxChunkBytes": 4000000}` | WARN that it is above the maximum 1500000 (same text as E7d); the budget is 1,500,000 |
 
 ### Polymer (`check_poly.py`, the test mod `e2e/polytest-mod`)
 
@@ -169,7 +169,7 @@ growth by translation is printed per scenario.
 | VW1 | 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation (`growth-items-26.2.txt`), 26.2 client, compression off, 1,500,000 | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes |
 | VW2 | VW1 with the default budget | as VW1 |
 | VW3 | 5,994 recipes whose every slot is a direct list of the same 27 items (`gen_items_datapack.py --lists`; about +63 % under translation), 26.2 client, compression off, default budget, phases `newer/give` and `newer/relog` | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes (1,706,228 in the review run) |
-| VW3x | VW3 with `maxChunkBytes` 1,500,000 | documents a limit: the client **is** disconnected with `Packet too large` (a 1,499,629-byte chunk became 2,416,673 bytes in the review run). The scenario passes when the client is disconnected; if it ever fails because the client stays connected, the statement about this ceiling in the main README is stale |
+| VW3x | VW3 with `maxChunkBytes` 1,500,000 (kind `limit`, not a baseline: the mod runs) | documents a limit: the client **is** disconnected with `Packet too large: size N` (a 1,499,629-byte chunk became 2,416,673 bytes in the review run). Per phase the checker requires the mod's split line (at least 2 chunks, none over 1,500,000 bytes), a digest line for the book, and a failing size N that is over 2,097,151, over the largest chunk and below the whole book, so that the failing packet is a translated chunk and not an unsplit book; and no `recipe_book_add` over the budget before the disconnect. It therefore fails without the mod, with a mod that splits nothing, and if the client stays connected (then the statement about this ceiling in the main README is stale) |
 
 `VIAFABRIC_JAR` replaces the pinned jar. ViaFabric 0.4.21+166 is the newest 1.21.11 build that starts: 0.4.21+168 and
 all later ones up to 0.4.22+184 crash at startup on Java 21 and 25 (`NoSuchMethodError ...J_L_Runtime$Version.feature`, an
@@ -196,7 +196,7 @@ time.
 |---|---|
 | `run_e2e.sh <scenario>...` | Builds the server directory for a scenario, starts the server (and Velocity), runs the phases, stops everything and runs the scenario's checker. The scenario catalogue is `define_scenario` in this file. |
 | `lib.sh` | Shared bash helpers (also used by `fetch.sh` and `realclient/run_client_e2e.sh`). |
-| `fetch.sh [server] [mods] [velocity] [jre25] [viafabric] [polymer-real]` | Downloads the pinned third-party files into the cache (SHA-256 verified) and prepares a server template for `E2E_LOADER`, so Minecraft is downloaded and remapped only once. `run_e2e.sh` calls it. |
+| `fetch.sh [server] [mods] [velocity] [jre25] [viafabric] [polymer-real]` | Downloads the pinned third-party files into the cache (SHA-256 verified) and prepares a server template for `E2E_LOADER`, so Minecraft is downloaded and remapped only once; the Loader jars the launcher downloads for the template are checked against pins too. `run_e2e.sh` calls it. |
 | `client.py` | The protocol client: `--protocol` 774/775/776/777, bundle tracking, `--locale`, `--switch-locale`, `--ping-interval-ms`. Writes `phaseN.json` (per-packet frame and data sizes, entry counts, replace flags, bundle index, runs with SHA-256 over the entry bytes, packet sequence, disconnect reason, size violations) and `phaseN.json.bin` (the entry bytes). |
 | `check.py <scenario>` | The assertions for the core, bundle, undeliverable, limit and latency scenarios; the library of the other checkers. Reads `work/<scenario>`. |
 | `check_poly.py`, `check_via.py` | The assertions for the Polymer and ViaFabric scenarios. |
@@ -217,9 +217,18 @@ Xvfb and about 700 MB of Gradle downloads on the first run, so it is not part of
 
 ## Downloads
 
-All with a SHA-256 pinned in `fetch.sh`: the Fabric server launcher for 1.21.11 and the Loader of `E2E_LOADER`
-(`meta.fabricmc.net`), Fabric API, Polymer (bundled), FabricProxy-Lite, ViaFabric, PolyDecorations and PolyFactory
-(Modrinth), Velocity (`fill-data.papermc.io`), and the Temurin 25 JRE (GitHub, Adoptium).
+All with a SHA-256 pinned in `fetch.sh`: the Fabric server launcher for 1.21.11 and `E2E_LOADER` (`meta.fabricmc.net`),
+Fabric API, Polymer (bundled), FabricProxy-Lite, ViaFabric, PolyDecorations and PolyFactory (Modrinth), Velocity
+(`fill-data.papermc.io`), and the Temurin 25 JRE (GitHub, Adoptium).
+
+The launcher is only a small installer that names the Loader version. On the template run it fetches a server JSON from
+`meta.fabricmc.net` and downloads the Loader, its mappings, Mixin and ASM from `maven.fabricmc.net` without checking any
+hash (it checks only Minecraft's jar). Those eight jars per Loader are therefore pinned in `fetch.sh` as well
+(`loader_library_pins`), checked after the template is built and on every later `fetch.sh server`; on a mismatch the
+template is deleted and the script stops. They were recorded from a download of every jar; the ASM jars and Mixin also
+match the `sha256` fields of the meta server JSON, and the pins of all four Loaders (0.19.5, 0.19.3, 0.19.0, 0.18.6)
+passed in a template run through the pinned launcher. The server JSON itself is not pinned: if Fabric changes the
+libraries it lists, the template run fails the check.
 
 Not pinned by the kit: Minecraft's own server jar and libraries, which the launcher downloads for the server template
 (Loom and the launcher check them against Mojang's manifest checksums); the Gradle artifacts the two test mods resolve
@@ -247,19 +256,22 @@ The checker prints one PASS/FAIL line per assertion. To re-check without re-runn
 
 Which jar each result comes from. "1.0.0" is the investigation that preceded 1.1.0, run with earlier copies of the
 harnesses that are now in this kit (same scenario ids unless a row says otherwise; the logs are not in the repository).
-"Smoke" is one run of the 1.1.0 jar while this kit was built: JDK 21, Loader 0.19.5, Fabric API 0.141.6, Polymer 0.15.2,
-the protocol client, and no timing conclusions. `TBD(verify)` is what the verification phase fills in by running the kit
+"Smoke" is one run while this kit was built, with a jar (SHA-256 `9af29acea8255cc3010b13ce5b08f1802dc31956f649703f2d086fa7dc94c0f4`)
+built from the main code of commit `0ad829b`, before the review fixes of `d49437f`: JDK 21, Loader 0.19.5, Fabric API
+0.141.6, Polymer 0.15.2, the protocol client, and no timing conclusions. Those fixes changed code that every scenario runs
+(the check on the codec call that decides whether measured bytes are reused, the clamp WARN text), so a smoke result is not
+a result of the current jar and checkers; the E7d cell says so where it matters. `TBD(verify)` is what the verification phase fills in by running the kit
 in full; it replaces these cells with the command, the jar's SHA-256, Loader, Java and the result.
 
-| Scenarios | 1.0.0 jar | 1.1.0 jar |
+| Scenarios | 1.0.0 jar | 1.1.0 |
 |---|---|---|
-| E0 to E7c | all passed. Baselines: E0 `Packet too big (is 9227553, should be less than 8388608)`, E0b `Packet too large: size 9227553 is over 8`. With the mod the 9,227,553-byte packet arrived as 9 packets of at most 1,048,576 bytes and their entry bytes hashed to the server's digest (E7b then expected the 65,536 minimum) | smoke: E0, E1, E1o, E6, E7d, E7e pass. `TBD(verify)`: the whole group on Java 21 / Loader 0.19.5, direct and behind Velocity |
+| E0 to E7c | all passed. Baselines: E0 `Packet too big (is 9227553, should be less than 8388608)`, E0b `Packet too large: size 9227553 is over 8`. With the mod the 9,227,553-byte packet arrived as 9 packets of at most 1,048,576 bytes and their entry bytes hashed to the server's digest (E7b then expected the 65,536 minimum) | smoke (before the review fixes): E0, E1, E1o, E6, E7e pass; E7d passed with the old clamp WARN text, which the current checker does not accept (the WARN now says to keep the default with ViaVersion and no compression), so it has not passed with a matching jar and checker. `TBD(verify)`: the whole group on Java 21 / Loader 0.19.5, direct and behind Velocity |
 | E1 on other Loaders and Java versions | 26 of 26 assertions on Loader 0.19.0, 0.19.3 and 0.19.5, each on Java 21 and Java 25. Loader 0.18.6 refused the mod | `TBD(verify)`: E1, E1v, E2, E3b, E5, E6, E6b, E8, E8c and E9b on Java 25 / Loader 0.19.5, Java 21 / Loader 0.19.0 and Java 25 / Loader 0.19.0 (MixinExtras 0.5.3: `reused for N of N packets`) |
-| E8 to E9s | a prototype of the bundle and undeliverable-entry code (not the 1.0.0 jar) passed E8, E8b, E8x, E9, E9b and E9s | smoke: E8, E8c, E9b, E9s pass. `TBD(verify)`: the rest, E8d behind Velocity |
-| L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs | smoke: L2 passes. `TBD(verify)`: L1 to L6 |
-| P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3), with other parameters than the kit uses now: P2 and PR3 at `maxChunkBytes` 65,536 (the kit: 262,144, the new minimum), P3 with fat recipes of two large tags (the kit: four, `--fat-tags 4`) and P5 at 2,000,000 (the kit: 1,500,000, the new maximum). A mutant of the mod that sizes with the bare codec was run on P1, P4, P5 and PR2 (R2): P1 passed, P4, P5 and PR2 failed; PR3 was only computed | smoke: PL1 passes. `TBD(verify)`: all of them with the kit's parameters, which have not been run before, with P4v and PR2v (no mismatch) and PL2 |
-| VB0 to VW3x | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit uses 1,500,000 for V3, V3b and V4). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | review: the direct-list book of VW3 and VW3x was run in a scratch copy of the kit (ViaFabric 0.4.21+166, Java 25, Loader 0.19.5): at the default budget it was delivered (largest translated frame 1,706,228), at 1,500,000 the client was disconnected; the kit's VW3 and VW3x checkers pass on that output. Smoke: V1 passes. `TBD(verify)`: VB0 to VW3x; VW1 and VW3 must not disconnect, VW3x must |
-| X1 to X1c | not run as scenarios (the per-split times were measured with probe timers) | smoke: X1 once, 10 complete books, all pings answered; not evidence. `TBD(verify)`: X1 and X1b with the 1.0.0 and the 1.1.0 jar, three runs each, and X1c |
+| E8 to E9s | a prototype of the bundle and undeliverable-entry code (not the 1.0.0 jar) passed E8, E8b, E8x, E9, E9b and E9s | smoke (before the review fixes): E8, E8c, E9b, E9s pass. `TBD(verify)`: the rest, E8d behind Velocity |
+| L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs | smoke (before the review fixes): L2 passes. `TBD(verify)`: L1 to L6 |
+| P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3), with other parameters than the kit uses now: P2 and PR3 at `maxChunkBytes` 65,536 (the kit: 262,144, the new minimum), P3 with fat recipes of two large tags (the kit: four, `--fat-tags 4`) and P5 at 2,000,000 (the kit: 1,500,000, the new maximum). A mutant of the mod that sizes with the bare codec was run on P1, P4, P5 and PR2 (R2): P1 passed, P4, P5 and PR2 failed; PR3 was only computed | smoke (before the review fixes): PL1 passes. `TBD(verify)`: all of them with the kit's parameters, which have not been run before, with P4v and PR2v (no mismatch) and PL2 |
+| VB0 to VW3x | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit uses 1,500,000 for V3, V3b and V4). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | review: the direct-list book of VW3 and VW3x was run in a scratch copy of the kit (ViaFabric 0.4.21+166, Java 25, Loader 0.19.5): at the default budget it was delivered (largest translated frame 1,706,228), at 1,500,000 the client was disconnected; the kit's VW3 and VW3x checkers pass on that output. Smoke (before the review fixes): V1 passes. `TBD(verify)`: VB0 to VW3x; VW1 and VW3 must not disconnect, VW3x must |
+| X1 to X1c | not run as scenarios (the per-split times were measured with probe timers) | smoke (before the review fixes): X1 once, 10 complete books, all pings answered; not evidence. `TBD(verify)`: X1 and X1b with the 1.0.0 and the 1.1.0 jar, three runs each, and X1c |
 | `realclient` A to F | A 3 of 3, B 23 of 23, C 23 of 23, D 13 of 13, E 13 of 13, F 2 of 2 assertions; B and C three times each | `TBD(verify)`: A to K |
 
 ## What this does not cover

@@ -153,7 +153,7 @@ define_scenario() {
           DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; NEWER_PROTOCOL=776
           PHASES=(newer/give newer/relog) ;;
     VW3x) via_preset; DESC="VW3 at the ceiling 1,500,000: documents a limit, the 26.2 client IS disconnected (a 1.5 MB chunk becomes 2.4 MB, over the 2,097,151-byte frame)"
-          KIND=baseline; DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; MAX_CHUNK=1500000
+          KIND=limit; DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; MAX_CHUNK=1500000
           NEWER_PROTOCOL=776; PHASES=(newer/give newer/relog) ;;
 
     X1)  perf_preset; DESC="latency: ten take/give cycles of the whole book while another connection is pinged every 10 ms, one event-loop thread, compression 256" ;;

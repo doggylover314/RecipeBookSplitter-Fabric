@@ -404,6 +404,32 @@ class BundleSplitIntegrationTest {
     }
 
     /**
+     * The entry-count threshold is the same for a bundle's recipe packet as for a loose one: one entry with "drop"
+     * (a lone entry may be undeliverable), two with "send" (one entry cannot be split).
+     */
+    @Test
+    void recipePacketInBundleIsACandidateFromTheMinimumEntries() {
+        ClientboundBundlePacket one = new ClientboundBundlePacket(List.of(motion(1),
+                new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(1), true)));
+        ClientboundBundlePacket two = new ClientboundBundlePacket(List.of(motion(1),
+                new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(2), true)));
+        ClientboundBundlePacket none = new ClientboundBundlePacket(List.of(motion(1),
+                new ClientboundRecipeBookAddPacket(List.of(), true)));
+
+        int drop = RecipeBookSendInterceptor.minEntries(TestConfigs.of(BUDGET, false, SplitterConfig.UndeliverableEntries.DROP, false));
+        int send = RecipeBookSendInterceptor.minEntries(TestConfigs.of(BUDGET, false, SplitterConfig.UndeliverableEntries.SEND, false));
+        assertEquals(1, drop);
+        assertEquals(2, send);
+
+        assertTrue(RecipeBookSendInterceptor.containsCandidate(one, drop));
+        assertFalse(RecipeBookSendInterceptor.containsCandidate(one, send));
+        assertTrue(RecipeBookSendInterceptor.containsCandidate(two, drop));
+        assertTrue(RecipeBookSendInterceptor.containsCandidate(two, send));
+        assertFalse(RecipeBookSendInterceptor.containsCandidate(none, drop));
+        assertFalse(RecipeBookSendInterceptor.containsCandidate(none, send));
+    }
+
+    /**
      * Fabric API (on the test classpath, as on most servers) copies every bundle's sub-packets into an ArrayList when
      * the bundle is built (fabric-networking-api-v1 BundlePacketMixin) and flattens nested bundles, so even a bundle
      * built from a one-shot Iterable can be looked into. Without Fabric API, {@code containsCandidate} only looks into a

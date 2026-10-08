@@ -618,7 +618,7 @@ class EncodeOnceIntegrationTest {
             }
             long perPacket = (threads.getCurrentThreadAllocatedBytes() - before) / rounds;
 
-            // About 14 KB (a few encodes, their buffers and the 4 KiB first segment); 271 KB with a 256 KiB segment.
+            // About 14 KB per packet in the benchmark (a few encodes, their buffers and the 256-byte first segment); 271 KB with a 256 KiB segment.
             assertTrue(perPacket < 100 * 1024, perPacket + " bytes allocated per one-entry packet");
         }
     }

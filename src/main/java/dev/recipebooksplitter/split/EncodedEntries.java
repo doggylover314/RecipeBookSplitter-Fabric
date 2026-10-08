@@ -23,10 +23,10 @@ public final class EncodedEntries {
     static final int SEGMENT_BYTES = 256 * 1024;
     /**
      * The first segment starts this small and doubles up to {@link #SEGMENT_BYTES}, so that the many packets with one
-     * or a few entries (every recipe unlock is one) do not allocate and zero 256 KiB for about 100 bytes. A packet that
-     * needs a second segment is a big one, and its later segments are allocated at full size.
+     * or a few entries (every recipe unlock is one, about 100 bytes) do not allocate and zero 256 KiB, or even 4 KiB.
+     * A packet that needs a second segment is a big one, and its later segments are allocated at full size.
      */
-    static final int FIRST_SEGMENT_BYTES = 4 * 1024;
+    static final int FIRST_SEGMENT_BYTES = 256;
 
     private final byte[] header;
     private final byte replaceFalse;

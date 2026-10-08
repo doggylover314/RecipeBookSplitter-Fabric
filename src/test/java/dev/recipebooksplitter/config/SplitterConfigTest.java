@@ -116,7 +116,7 @@ class SplitterConfigTest {
 
             assertEquals(List.of(
                     "[RecipeBookSplitter] maxChunkBytes 65536 is below the minimum 262144 (every chunk makes the client rebuild its recipe book); using 262144",
-                    "[RecipeBookSplitter] maxChunkBytes 2000000 is above the maximum 1500000 (a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to grow a chunk by up to 63%); using 1500000"),
+                    "[RecipeBookSplitter] maxChunkBytes 2000000 is above the maximum 1500000 (a frame holds at most 2,097,151 bytes as sent); using 1500000. With ViaVersion and network compression off, keep the default 1048576: translation was measured to grow a chunk by up to 63%, which 1500000 bytes cannot absorb"),
                     log.messages(Level.WARN));
             assertEquals(2, log.entries().size());
         }

@@ -176,8 +176,8 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
             return MIN_MAX_CHUNK_BYTES;
         }
         if (integer.compareTo(BigInteger.valueOf(MAX_MAX_CHUNK_BYTES)) > 0) {
-            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to grow a chunk by up to 63%); using {}",
-                    KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
+            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent); using {}. With ViaVersion and network compression off, keep the default {}: translation was measured to grow a chunk by up to 63%, which {} bytes cannot absorb",
+                    KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES, DEFAULT_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
             return MAX_MAX_CHUNK_BYTES;
         }
         return integer.intValueExact();

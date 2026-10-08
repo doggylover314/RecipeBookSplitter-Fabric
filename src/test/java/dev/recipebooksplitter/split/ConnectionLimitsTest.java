@@ -158,6 +158,9 @@ class ConnectionLimitsTest {
         assertTrue(ON.check(2_000_000, NEVER).sendable());
         assertTrue(ON.check(256, NEVER).sendable(), "exactly the threshold: compressed, and small");
         assertTrue(ON.check(255, NEVER).sendable(), "below the threshold: raw, and small");
+        // Vanilla's CompressionEncoder sends a packet raw only if it is shorter than the threshold. -1: no frame size is known without deflating.
+        assertEquals(-1, ON.check(256, NEVER).frameBytes(), "exactly the threshold: compressed, not raw");
+        assertEquals(256, ON.check(255, NEVER).frameBytes(), "below the threshold: raw, one byte longer for the 0 that says so");
     }
 
     @Test

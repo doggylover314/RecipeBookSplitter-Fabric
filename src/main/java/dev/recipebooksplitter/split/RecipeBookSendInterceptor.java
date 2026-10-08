@@ -515,6 +515,10 @@ public final class RecipeBookSendInterceptor {
         ClientboundRecipeBookAddPacket packet = split.original();
         EntrySizer.Measurement measurement = split.measurement();
         List<ChunkPlanner.Chunk> plan = split.plan();
+        if (plan.size() <= 1 && split.issues().isEmpty() && split.sentSha256() == null && !LOGGER.isDebugEnabled()) {
+            // The common case, a recipe unlock of one entry: only the DEBUG line below could be logged, so don't build it.
+            return;
+        }
         String player = describe(connection);
         long total = measurement.totalBytes();
         int entries = packet.entries().size();

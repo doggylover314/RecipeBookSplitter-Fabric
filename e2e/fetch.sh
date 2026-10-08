@@ -7,7 +7,8 @@
 #
 #   server        Fabric server launcher for 1.21.11 and E2E_LOADER (0.19.5 default; 0.19.3, 0.19.0 and 0.18.6 are
 #                 pinned too), plus a server template: the launcher's first run downloads and remaps Minecraft, which
-#                 every scenario then reuses. Needs ACCEPT_EULA=true.
+#                 every scenario then reuses, and downloads the Loader and its libraries from maven.fabricmc.net, which
+#                 are checked against the SHA-256 pins below. Needs ACCEPT_EULA=true.
 #   mods          Fabric API, Polymer (bundled), FabricProxy-Lite
 #   velocity      Velocity 4.2.0 (needs Java 25)
 #   jre25         a Temurin 25 JRE for Velocity (skipped if the cache has one, or VELOCITY_JAVA / JAVA is Java 25)
@@ -51,6 +52,73 @@ launcher_sha256() {
   esac
 }
 
+# The jars that the launcher downloads for a loader (the Loader, its mappings, Mixin and ASM) from maven.fabricmc.net,
+# named by the server JSON of meta.fabricmc.net; the launcher itself checks no hash for them. "<path below libraries/>
+# <sha256>" per line. Recorded from a download of every jar; the ASM jars and Mixin also match the sha256 fields of that
+# server JSON, and the 0.19.5 jars are those of a template made by the pinned launcher.
+loader_library_pins() {
+  case $1 in
+    0.19.5) cat <<'PINS'
+org/ow2/asm/asm/9.10.1/asm-9.10.1.jar ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb
+org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc
+org/ow2/asm/asm-commons/9.10.1/asm-commons-9.10.1.jar 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895
+org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar 3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b
+org/ow2/asm/asm-util/9.10.1/asm-util-9.10.1.jar 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c
+net/fabricmc/sponge-mixin/0.17.4+mixin.0.8.7/sponge-mixin-0.17.4+mixin.0.8.7.jar 1f0ae44db7295f8626f33b1dc0ad7f043d8954a8d6847247875fcc5dfcecc934
+net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar 886da9b21bf26b24a18960ec868612630821f161d7e8b23cd64bbaa51298cabc
+net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar 93044e4dd46de5d8136701292f05e868da096d2c9fddb4793e4fdbcc63efc695
+PINS
+      ;;
+    0.19.3) cat <<'PINS'
+org/ow2/asm/asm/9.10.1/asm-9.10.1.jar ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb
+org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc
+org/ow2/asm/asm-commons/9.10.1/asm-commons-9.10.1.jar 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895
+org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar 3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b
+org/ow2/asm/asm-util/9.10.1/asm-util-9.10.1.jar 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c
+net/fabricmc/sponge-mixin/0.17.3+mixin.0.8.7/sponge-mixin-0.17.3+mixin.0.8.7.jar 9e90efec71d2bad5b96c9089f019d14a8603227d3c5f408d12f53fae89d99d41
+net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar 886da9b21bf26b24a18960ec868612630821f161d7e8b23cd64bbaa51298cabc
+net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar 73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958
+PINS
+      ;;
+    0.19.0) cat <<'PINS'
+org/ow2/asm/asm/9.9/asm-9.9.jar 03d99a74ad1ee5c71334ef67437f4ef4fe3488caa7c96d8645abc73c8e2017d4
+org/ow2/asm/asm-analysis/9.9/asm-analysis-9.9.jar 6a15d28e8bd29ba4fd5bca4baf9b50e8fba2d7b51fbf78cfa0c875a7214c678b
+org/ow2/asm/asm-commons/9.9/asm-commons-9.9.jar db2f6f26150bbe7c126606b4a1151836bcc22a1e05a423b3585698bece995ff8
+org/ow2/asm/asm-tree/9.9/asm-tree-9.9.jar 42178f3775c9c63f9e5e1446747d29b4eca4d91bd6e75e5c43cfa372a47d38c6
+org/ow2/asm/asm-util/9.9/asm-util-9.9.jar 3842e13cfe324ee9ab7cdc4914be9943541ead397c17e26daf0b8a755bede717
+net/fabricmc/sponge-mixin/0.17.1+mixin.0.8.7/sponge-mixin-0.17.1+mixin.0.8.7.jar 855815cdfd685daf1a6c6ac391669754b805ce4e6ae1bc900ed29eedba48b806
+net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar 886da9b21bf26b24a18960ec868612630821f161d7e8b23cd64bbaa51298cabc
+net/fabricmc/fabric-loader/0.19.0/fabric-loader-0.19.0.jar 97afcb471fdde8cca40de3f3fbcebb443711975573ef9a52bc80636c651305d4
+PINS
+      ;;
+    0.18.6) cat <<'PINS'
+org/ow2/asm/asm/9.9/asm-9.9.jar 03d99a74ad1ee5c71334ef67437f4ef4fe3488caa7c96d8645abc73c8e2017d4
+org/ow2/asm/asm-analysis/9.9/asm-analysis-9.9.jar 6a15d28e8bd29ba4fd5bca4baf9b50e8fba2d7b51fbf78cfa0c875a7214c678b
+org/ow2/asm/asm-commons/9.9/asm-commons-9.9.jar db2f6f26150bbe7c126606b4a1151836bcc22a1e05a423b3585698bece995ff8
+org/ow2/asm/asm-tree/9.9/asm-tree-9.9.jar 42178f3775c9c63f9e5e1446747d29b4eca4d91bd6e75e5c43cfa372a47d38c6
+org/ow2/asm/asm-util/9.9/asm-util-9.9.jar 3842e13cfe324ee9ab7cdc4914be9943541ead397c17e26daf0b8a755bede717
+net/fabricmc/sponge-mixin/0.17.0+mixin.0.8.7/sponge-mixin-0.17.0+mixin.0.8.7.jar e7889fcd185e4199052dcbcf0fe2128581cbf8630aea7feb37429667b1ba49a9
+net/fabricmc/intermediary/1.21.11/intermediary-1.21.11.jar 886da9b21bf26b24a18960ec868612630821f161d7e8b23cd64bbaa51298cabc
+net/fabricmc/fabric-loader/0.18.6/fabric-loader-0.18.6.jar 2bc15285dde1d5b9ea3c8444d7063c60184c7e21883785e180f7a26e93772e41
+PINS
+      ;;
+    *) echo "fetch.sh: no pinned libraries for loader $1" >&2; return 1 ;;
+  esac
+}
+
+# verify_loader_libraries <template dir> <loader>: every jar above is there with its pinned SHA-256
+verify_loader_libraries() {
+  local template=$1 loader=$2 path sha bad=0
+  while read -r path sha; do
+    if [ "$(sha256sum "$template/libraries/$path" 2>/dev/null | cut -d' ' -f1)" != "$sha" ]; then
+      echo "fetch.sh: libraries/$path in the server template is missing or does not match its pinned SHA-256 $sha" >&2
+      bad=1
+    fi
+  done < <(loader_library_pins "$loader")
+  return $bad
+}
+
+
 fetch_server() {
   local loader=$E2E_LOADER launcher sha template
   launcher=fabric-server-launch-1.21.11-$loader.jar
@@ -58,6 +126,11 @@ fetch_server() {
   fetch "$launcher" "https://meta.fabricmc.net/v2/versions/loader/1.21.11/$loader/1.1.2/server/jar" "$sha"
   template=$(template_dir)
   if [ -d "$template/libraries" ] && [ -d "$template/versions" ]; then
+    if ! verify_loader_libraries "$template" "$loader"; then
+      echo "fetch.sh: removing the server template $template; run fetch.sh again to build it anew" >&2
+      rm -rf "$template"
+      exit 1
+    fi
     return
   fi
   if [ "${ACCEPT_EULA:-}" != "true" ]; then
@@ -83,6 +156,11 @@ fetch_server() {
     exit 1
   }
   rm -rf "$template/server.properties" "$template/launch.log" "$template/logs"
+  if ! verify_loader_libraries "$template" "$loader"; then
+    echo "fetch.sh: removing the server template $template" >&2
+    rm -rf "$template"
+    exit 1
+  fi
 }
 
 fetch_mods() {
