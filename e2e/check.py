@@ -471,9 +471,11 @@ def run_perf_scenario(report, scenario, lines):
             warm = sorted(w for w in worst[1:] if w == w)
             if warm:
                 # With ten gives the p90 is the largest value, and that is the first give after the start (a cold JVM).
-                warm_p90 = warm[min(len(warm) - 1, int(0.9 * len(warm)))]
+                # Of the other nine it would be their largest value again (int(0.9 * n) is n - 1 for n up to 10), so the
+                # p90 is printed only from eleven values on.
+                warm_p90 = f"p90 {warm[min(len(warm) - 1, int(0.9 * len(warm)))]:.1f}, " if len(warm) > 10 else ""
                 report.note(f"  the first give (cold JVM): {worst[0]:.1f}; the other {len(warm)} gives: median {statistics.median(warm):.1f}, "
-                            f"p90 {warm_p90:.1f}, max {warm[-1]:.1f}")
+                            f"{warm_p90}max {warm[-1]:.1f}")
         all_rtt = sorted(rtt for _, rtt in prober["pings"])
         report.note(f"all {len(all_rtt)} pings (ms): median {statistics.median(all_rtt):.1f}, p99 {all_rtt[int(0.99 * (len(all_rtt) - 1))]:.1f}, max {all_rtt[-1]:.1f}")
 

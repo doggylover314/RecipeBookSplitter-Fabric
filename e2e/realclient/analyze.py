@@ -185,6 +185,10 @@ def main():
             print("NOTE: the client's digest was on (RBS_DIGEST=1): it re-encodes the received entries on the render thread "
                   "inside the frame that handles them, so these frame times are inflated. Use RBS_DIGEST=0 to time frames.")
 
+    if not digest_on:
+        print("NOTE: the client's digest was off (RBS_DIGEST=0): the comparisons of its entry hashes with the server's digest "
+              "are skipped.")
+
     # Main-thread cost per packet against the size of the recipe book at that point (rebuildCollections is O(known)).
     print()
     print("handle time by recipe book size (ms per packet, run 2 = give, run 3 = relog):")
@@ -207,14 +211,44 @@ def main():
             print("  server WARN: " + w)
         check("huge entry: the server sent the packets (no 'Packet too big/large' on the server)", not server["errors"],
               "; ".join(server["errors"][:2]))
-        check("huge entry: the real client cannot read the entry and is disconnected (README: 2 MiB NBT quota)",
-              len(unexpected) >= 1, "; ".join(e["reason"][:300] for e in unexpected[:2]))
+        # The disconnect reason only says "Failed to decode packet"; the NbtAccounterException is in the connection's
+        # exception chain (netty_exception event), so look in both: a disconnect for any other reason must fail.
+        causes = [e["reason"] for e in unexpected] + [" <- ".join(e.get("chain", [])) for e in events if e["event"] == "netty_exception"]
+        nbt = [c for c in causes if "NbtAccounterException" in c]
+        check("huge entry: the real client cannot read the entry (NbtAccounterException, its 2 MiB NBT quota) and is disconnected",
+              len(unexpected) >= 1 and bool(nbt),
+              ("; ".join(c[:300] for c in nbt[:1]) if nbt else "no NbtAccounterException; disconnects: "
+               + "; ".join(e["reason"][:200] for e in unexpected[:2])))
     elif scenario["rbs"]:
         relogs, reloads = scenario.get("relogs", 1), scenario.get("reloads", 0)
         bundled = scenario.get("bundle_chunks", False)
         check("client was never disconnected unexpectedly", not unexpected, "; ".join(e["reason"] for e in unexpected))
         check(f"client joined {1 + relogs} times (join + {relogs} relog) and logged {2 + relogs + reloads} summaries",
               len(joins) == 1 + relogs and len(runs) == 2 + relogs + reloads, f"joins={len(joins)} summaries={len(runs)}")
+
+        # The server's split line says whether the chunks went out in one bundle. The client cannot tell: on a fast link
+        # loose chunks are handled in a single frame too, so the frame count alone does not show that bundleChunks was used.
+        way = "sent in one bundle (server log)" if bundled else "sent loose, not in a bundle (server log)"
+
+        def sent_as_configured(split):
+            return split["one_bundle"] == bundled
+
+        def digest_check(tag, client_digest, server_candidates):
+            """The client's entry digest against the server's. It is skipped only on purpose (RBS_DIGEST=0, the client
+            computes none); with the client's digest on, a digest missing on either side is a failure and not a silent
+            skip (the server needs -Drecipebooksplitter.debugDigest=true, which run_client_e2e.sh passes)."""
+            if client_digest is None and not digest_on:
+                return
+            if client_digest is None:
+                check(f"{tag}: client re-encoded entry bytes hash to the server's digest", False,
+                      "the client's digest was on but its summary has no entry digest")
+            elif not server_candidates:
+                check(f"{tag}: client re-encoded entry bytes hash to the server's digest", False,
+                      f"no matching digest line in server.log (client {client_digest[:16]})")
+            else:
+                check(f"{tag}: client re-encoded entry bytes hash to the server's digest",
+                      any(x["sha256"] == client_digest for x in server_candidates),
+                      f"client {client_digest[:16]} server {[x['sha256'][:16] for x in server_candidates]}")
 
         def single_frame(tag, run):
             """With bundleChunks a book arrives in one bundle, which the client handles in one go."""
@@ -238,15 +272,13 @@ def main():
             check("recipe give: client recipe book = recipes known before + recipes given",
                   given is not None and give["knownRecipes"] == fresh["knownRecipes"] + given,
                   f"known before={fresh['knownRecipes']} given={given} client known={give['knownRecipes']}")
-            check("recipe give: client received the same number of packets as the server's chunk count",
-                  bool(give_splits) and give["packets"] == give_splits[-1]["chunks"],
-                  f"server chunks={give_splits[-1]['chunks'] if give_splits else None} client packets={give['packets']}")
+            check(f"recipe give: client received the same number of packets as the server's chunk count, {way}",
+                  bool(give_splits) and give["packets"] == give_splits[-1]["chunks"] and sent_as_configured(give_splits[-1]),
+                  f"server chunks={give_splits[-1]['chunks'] if give_splits else None} client packets={give['packets']} "
+                  f"server 'in one bundle'={give_splits[-1]['one_bundle'] if give_splits else None}")
             single_frame("recipe give", give)
             sd = [x for x in server["digests"] if x["entries"] == give["entries"] and not x["replace"]]
-            if give["entryDigest"] and sd:
-                check("give: client re-encoded entry bytes hash to the server's digest",
-                      any(x["sha256"] == give["entryDigest"] for x in sd),
-                      f"client {give['entryDigest'][:16]} server {[x['sha256'][:16] for x in sd]}")
+            digest_check("give", give["entryDigest"], sd)
             # (the fresh player's first join also has a replace=true digest, of its one or two recipes)
             server_relog_digests = [x for x in server["digests"] if x["replace"] and x["entries"] == give["knownRecipes"]]
             for k, relog in enumerate(relog_runs, 1):
@@ -257,17 +289,15 @@ def main():
                       spl is not None and relog["knownRecipes"] == relog["entries"] == spl["entries"] == give["knownRecipes"],
                       f"known={relog['knownRecipes']} run entries={relog['entries']} "
                       f"server entries={spl['entries'] if spl else None} known after give={give['knownRecipes']}")
-                check(f"{tag}: same chunk count as the server", spl is not None and relog["packets"] == spl["chunks"],
-                      f"server chunks={spl['chunks'] if spl else None} client packets={relog['packets']}")
+                check(f"{tag}: same chunk count as the server, {way}",
+                      spl is not None and relog["packets"] == spl["chunks"] and sent_as_configured(spl),
+                      f"server chunks={spl['chunks'] if spl else None} client packets={relog['packets']} "
+                      f"server 'in one bundle'={spl['one_bundle'] if spl else None}")
                 check(f"{tag}: replace=true only on the first packet", relog["replacePackets"] == 1,
                       f"{relog['replacePackets']}")
                 check(f"{tag}: recipe ids identical to those after the give (SHA-256 of the sorted id list)",
                       give["idsSha256"] == relog["idsSha256"], f"{give['idsSha256'][:16]} vs {relog['idsSha256'][:16]}")
-                dg = server_relog_digests[k - 1] if k - 1 < len(server_relog_digests) else None
-                if relog["entryDigest"] and dg:
-                    check(f"{tag}: client re-encoded entry bytes hash to the server's digest",
-                          dg["sha256"] == relog["entryDigest"],
-                          f"client {relog['entryDigest'][:16]} server {dg['sha256'][:16]}")
+                digest_check(tag, relog["entryDigest"], server_relog_digests[k - 1:k])
         check("server logged no 'Packet too big/large'", not server["errors"], "; ".join(server["errors"][:2]))
     else:
         check("baseline: the client was disconnected", len(unexpected) >= 1, f"{len(unexpected)} unexpected disconnects")

@@ -39,8 +39,8 @@ public abstract class ConnectionMixin {
      * Fabric Loader 0.16.0 on), so it is not what sets the Loader floor. fabric.mod.json requires Loader 0.19.0 because
      * that is the oldest Loader that was tested: the 1.0.0 jar (which had no @WrapOperation) on 0.19.0, 0.19.3 and
      * 0.19.5, each on Java 21 and 25. PacketEncoderMixin of 1.1.0 uses MixinExtras' @WrapOperation, which Loader 0.19.0
-     * bundles (MixinExtras 0.5.3; Loader 0.19.5 bundles 0.5.5). The 1.1.0 jar has only run on Loader 0.19.5; running it
-     * on 0.19.0 (MixinExtras 0.5.3) is still to be verified (README, "Pending verification").
+     * bundles (MixinExtras 0.5.3; Loader 0.19.5 bundles 0.5.5). The 1.1.0 jar was verified on both Loaders, on Java 21
+     * and 25 (README, "Requirements"): the wrap is applied with MixinExtras 0.5.3 too.
      */
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V",
             at = @At("HEAD"), cancellable = true, order = 1500)

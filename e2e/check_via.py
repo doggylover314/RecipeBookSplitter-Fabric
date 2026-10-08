@@ -171,6 +171,7 @@ def main():
     if scenario["datapack"] == "items-worst":
         # these books exist to be the worst case for translation growth: if a translation stopped growing them, VW1 to
         # VW3 would pass without testing the ceiling (measured: +25.3 % for the book of VW1, +61 to 63 % for VW3)
+        r.check(bool(summary["growth"]), "a newer-protocol phase was paired with an earlier control phase (the growth check below needs one)")
         for row in summary["growth"]:
             translated, server_side = sum(row["translated_sizes"]), sum(row["server_sizes"])
             r.check(server_side > 0 and translated >= 1.2 * server_side,

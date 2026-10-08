@@ -18,7 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 e2e_defaults
 
 CORE_SCENARIOS=(E0 E0b E1 E1v E1o E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c E7d E7e E8 E8b E8x E8c E8d E8e E9 E9b E9s L2 L3 L4 L5 L6)
-POLYMER_SCENARIOS=(P0 P1 P1b P2 P3 P4 P4v P5 P6 P7 PV PR1 PR2 PR2v PR3 PL1 PL2)
+POLYMER_SCENARIOS=(P0 P1 P1b P2 P3 P4 P4v P5 P6 P7 PV PR1 PR2 PR2v PR3 PL1 PL2 PX1 PX1b PX2 PX2b PE6 PE6b PE6c)
 VIA_SCENARIOS=(VB0 VB0b V1 V1b V2 V2b V5 VC VW1 VW2 VW3)
 PERF_SCENARIOS=(X1 X1b X1c)
 
@@ -27,6 +27,13 @@ polymer_preset() {
   CHECKER=check_poly.py; EXTRA_MODS=(polytest); DATAPACK=polytest; LOG_OVERSIZED=true
   PACK_ARGS=(--tagged 300 --direct 1200 --fat 0)
   PHASES=(give "cmd:polytest measure Tester" "cmd:polytest measure Tester send")
+}
+# Polymer items in the recipes (the P1 pack) together with ViaFabric: the ViaFabric checker and phases (a 774 control and a
+# newer-protocol client), the Polymer data pack.
+polymer_via_preset() {
+  polymer_preset
+  CHECKER=check_via.py; EXTRA_MODS=(polytest viafabric)
+  PHASES=(774/give_take 774/give_take newer/give 774/relog newer/relog)
 }
 via_preset() {
   CHECKER=check_via.py; EXTRA_MODS=(viafabric); LOG_OVERSIZED=true
@@ -132,6 +139,14 @@ define_scenario() {
          PHASES=(give "cmd:polytest measure Tester" locale:de_de) ;;
     PL2) polymer_preset; DESC="as PR2 (PolyFactory), phase 3 a language change: does the de_de book differ from the en_us one?"
          EXTRA_MODS=(polytest polyfactory); DATAPACK=none; PHASES=(give "cmd:polytest measure Tester" locale:de_de) ;;
+    PX1)  polymer_via_preset; DESC="Polymer items in recipes + ViaFabric, compression 256, 26.1 client (the P1 pack under translation)" ;;
+    PX1b) polymer_via_preset; DESC="as PX1 with a 26.2 client (two translation steps)"; NEWER_PROTOCOL=776 ;;
+    PX2)  polymer_via_preset; DESC="as PX1, compression off"; COMP=-1 ;;
+    PX2b) polymer_via_preset; DESC="as PX2 with a 26.2 client (two translation steps)"; COMP=-1; NEWER_PROTOCOL=776 ;;
+    PE6)  polymer_preset; DESC="P1 (Polymer items in recipes) behind Velocity 4.2.0 + FabricProxy-Lite, backend compression 256"; PROXY=1 ;;
+    PE6b) polymer_preset; DESC="as PE6, backend compression off"; PROXY=1; COMP=-1 ;;
+    PE6c) polymer_preset; DESC="as PE6b with Velocity sending raw frames to the client (compression-threshold -1), like L2 with the Polymer book"
+          PROXY=1; COMP=-1; VCOMP=-1 ;;
 
     VB0)  via_preset; DESC="baseline: ViaFabric, no mod, compression 256, 26.1 client"; KIND=baseline; RBS=0; PHASES=(newer/give newer/relog) ;;
     VB0b) via_preset; DESC="baseline: ViaFabric, no mod, compression off, 26.1 client"; KIND=baseline; RBS=0; COMP=-1

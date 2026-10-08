@@ -30,8 +30,9 @@
 #                    the server's digest; 0: it does not (-Prbs.harness.digest=false) and the assertions about the digests
 #                    are skipped. The re-encoding runs on the client's render thread inside the frame that handles the
 #                    packets, so it adds several hundred ms to the frame that handles a whole book (a bundle). The frame
-#                    times in the output are only meaningful with RBS_DIGEST=0. (Gradle drops environment variables whose
-#                    names contain a dot, as ORG_GRADLE_PROJECT_rbs.harness.digest would, so the script passes -P itself.)
+#                    times in the output are only meaningful with RBS_DIGEST=0. (The gradlew script runs under /bin/sh, and
+#                    shells such as dash drop environment variables whose names contain a dot, as
+#                    ORG_GRADLE_PROJECT_rbs.harness.digest does, before Gradle starts, so the script passes -P itself.)
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
