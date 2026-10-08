@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Patches a freshly generated velocity.toml for the E2E kit: loopback bind, offline mode, modern forwarding, one
-backend server called "lobby", no forced hosts. Usage: patch_velocity.py <velocity.toml> <proxy-port> <backend-port>"""
+backend server called "lobby", no forced hosts. Usage: patch_velocity.py <velocity.toml> <proxy-port> <backend-port>
+[compression-threshold]
+
+The optional fourth argument sets Velocity's own [advanced] compression-threshold, the compression towards the client
+(-1 turns it off; Velocity's default is 256)."""
 import re
 import sys
 
@@ -20,6 +24,8 @@ def replace_table(text, table, body):
 
 
 def main():
+    if len(sys.argv) not in (4, 5):
+        sys.exit(__doc__)
     path, proxy_port, backend_port = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
     with open(path) as f:
         text = f.read()
@@ -28,6 +34,8 @@ def main():
     text = replace_line(text, "player-info-forwarding-mode", '"MODERN"')
     text = replace_table(text, "servers", f'lobby = "127.0.0.1:{backend_port}"\ntry = ["lobby"]')
     text = replace_table(text, "forced-hosts", "")
+    if len(sys.argv) == 5:
+        text = replace_line(text, "compression-threshold", int(sys.argv[4]))
     with open(path, "w") as f:
         f.write(text)
 

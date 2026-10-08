@@ -1,0 +1,1 @@
+{"type": "minecraft:crafting_shaped", "category": "equipment", "pattern": ["AB", "BA"], "key": {"A": "polytest:p113", "B": "polytest:p391"}, "result": {"id": "polytest:p224", "count": 1}}

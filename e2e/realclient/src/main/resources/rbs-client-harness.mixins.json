@@ -1,0 +1,20 @@
+{
+  "required": true,
+  "package": "dev.recipebooksplitter.harness.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ClientCommonPacketListenerImplMixin",
+    "ClientHandshakePacketListenerImplMixin",
+    "ClientPacketListenerMixin",
+    "ClientRecipeBookMixin",
+    "ClientRecipeBookTimingMixin",
+    "ConnectionMixin",
+    "MinecraftMixin",
+    "PacketDecoderMixin",
+    "SessionSearchTreesMixin",
+    "SessionSearchTreesTimingMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

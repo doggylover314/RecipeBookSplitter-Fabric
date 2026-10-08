@@ -8,3 +8,4 @@ e2e/work/
 __pycache__/
 *.pyc
 logs/
+e2e/realclient/work/

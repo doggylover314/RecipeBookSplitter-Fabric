@@ -1,0 +1,21 @@
+// Test-only mod for the e2e kit: a /rbstest command that sends recipe book packets vanilla never sends
+// (inside a bundle, or with one entry bigger than the connection can send). Never install it on a real server.
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+}
+
+version = '0.0.1'
+base { archivesName = 'rbs-e2e-testmod' }
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+tasks.withType(JavaCompile).configureEach { it.options.release = 21 }
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}

@@ -1,0 +1,64 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+}
+
+version = '1.0.0'
+group = 'dev.recipebooksplitter.harness'
+
+base {
+    archivesName = 'rbs-client-harness'
+}
+
+repositories {
+    // Fabric maven is added by Loom automatically.
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    // Only Fabric Loader (for Knot and Mixin): the harness deliberately does not load Fabric API on the client.
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+}
+
+// Settings for the client run, all optional (-P<name>=<value> on the gradle command line):
+//   rbs.server          host:port to join with --quickPlayMultiplayer (default 127.0.0.1:25565)
+//   rbs.username        player name (default Tester)
+//   rbs.harness.*       forwarded as system properties to the client, see Harness.java
+//   rbs.xmx             client heap (default 2G)
+def p = { String name, String dflt -> project.findProperty(name)?.toString() ?: dflt }
+
+loom {
+    runs {
+        client {
+            client()
+            ideConfigGenerated(false)
+            runDir 'run'
+            programArgs '--username', p('rbs.username', 'Tester'),
+                    '--quickPlayMultiplayer', p('rbs.server', '127.0.0.1:25565'),
+                    '--width', '854', '--height', '480'
+            vmArg "-Xmx${p('rbs.xmx', '2G')}"
+            property 'rbs.harness.server', p('rbs.server', '127.0.0.1:25565')
+            project.properties.each { k, v ->
+                if (k.startsWith('rbs.harness.') && k != 'rbs.harness.server') {
+                    property k, v.toString()
+                }
+            }
+        }
+    }
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": inputs.properties.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}

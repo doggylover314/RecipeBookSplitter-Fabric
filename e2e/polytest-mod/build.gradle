@@ -1,0 +1,81 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    // Fabric maven is added by Loom automatically.
+    maven {
+        name = 'Nucleoid'
+        url = 'https://maven.nucleoid.xyz'
+        content {
+            includeGroup 'eu.pb4'
+            includeGroup 'xyz.nucleoid'
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    // Compile against polymer-core; the e2e server runs the Modrinth "polymer-bundled" jar of the same version.
+    modImplementation "eu.pb4:polymer-core:${project.polymer_version}"
+}
+
+// Pins for the third-party artifacts the test mod compiles against: SHA-256 of the jars as served by maven.nucleoid.xyz
+// (https://maven.nucleoid.xyz/eu/pb4/polymer-core/0.15.2+1.21.11/, .../xyz/nucleoid/packet-tweaker/0.6.0+1.21.10/).
+// The build fails if a resolved jar has a different hash or if one of them was not resolved at all.
+def pinnedPolymerJars = [
+        'polymer-core-0.15.2+1.21.11.jar'                : 'd1eae4a3a72e050c18129375a4b0c6841a78bfe427b905eb51cd55cb7158c309',
+        'polymer-common-0.15.2+1.21.11.jar'              : 'dbc35ad818f160936a4d49431ea03be22ea82cfd3191151ead30b9d92daad0a5',
+        'polymer-networking-0.15.2+1.21.11.jar'          : 'f9ac0be5e7f98ad723399f32b6c1b250f0f34525e5ceae65ae19af2efec394b3',
+        'polymer-reg-sync-manipulator-0.15.2+1.21.11.jar': '1d7aa751f35b35848824a63f68e30f3533454c540871c7c36b28a462c1aab39b',
+        'packet-tweaker-0.6.0+1.21.10.jar'               : '0be6d4dde0dac1a7ab530c7c4ad879232ec03713e6f00f0d67181bc6ffe9f35f',
+]
+
+tasks.register('verifyPolymerArtifacts') {
+    doLast {
+        def detached = configurations.detachedConfiguration(dependencies.create("eu.pb4:polymer-core:${project.polymer_version}"))
+        def seen = [] as Set
+        detached.resolvedConfiguration.resolvedArtifacts.each { artifact ->
+            def expected = pinnedPolymerJars[artifact.file.name]
+            if (expected != null) {
+                def actual = java.security.MessageDigest.getInstance('SHA-256').digest(artifact.file.bytes).encodeHex().toString()
+                if (actual != expected) {
+                    throw new GradleException("SHA-256 mismatch for ${artifact.file.name}: expected ${expected}, got ${actual}")
+                }
+                seen << artifact.file.name
+            }
+        }
+        def missing = pinnedPolymerJars.keySet() - seen
+        if (!missing.isEmpty()) {
+            throw new GradleException("pinned artifacts were not resolved: ${missing}")
+        }
+        logger.lifecycle("verified SHA-256 of ${seen.size()} Polymer artifacts")
+    }
+}
+tasks.named('compileJava') { dependsOn 'verifyPolymerArtifacts' }
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": inputs.properties.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}

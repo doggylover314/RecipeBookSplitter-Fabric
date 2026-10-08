@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "rbs_polytest",
+  "version": "${version}",
+  "name": "RBS Polymer test content",
+  "description": "Test content for the Recipe Book Splitter end-to-end kit: server-side Polymer items, an item tag and recipes using them, plus the /polytest measure debug command. Not a real mod.",
+  "authors": [],
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "dev.recipebooksplitter.e2e.polytest.PolyTestMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*",
+    "polymer-core": "*"
+  }
+}
