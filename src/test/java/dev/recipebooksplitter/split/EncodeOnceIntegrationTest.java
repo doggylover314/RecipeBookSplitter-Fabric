@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import dev.recipebooksplitter.RecipeBookSplitter;
 import dev.recipebooksplitter.config.SplitterConfig;
@@ -14,6 +15,8 @@ import dev.recipebooksplitter.testutil.LogCapture;
 import dev.recipebooksplitter.testutil.RecipeFixtures;
 import dev.recipebooksplitter.testutil.TestConfigs;
 import dev.recipebooksplitter.util.Sizes;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -22,7 +25,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.network.HandlerNames;
+import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket.Entry;
 import org.apache.logging.log4j.Level;
@@ -50,6 +55,7 @@ class EncodeOnceIntegrationTest {
     void reset() {
         RecipeBookSendInterceptor.encodeOnce = true;
         RecipeBookSendInterceptor.verifyEncodeOnce = false;
+        RecipeBookSendInterceptor.LOGGED_NOT_KEPT.clear();
         RecipeBookSplitter.setConfig(SplitterConfig.DEFAULTS);
     }
 
@@ -475,5 +481,155 @@ class EncodeOnceIntegrationTest {
             assertTrue(oversized.get(0).contains("(" + Sizes.bytes(bigPacketBytes) + " bytes)"), oversized.get(0));
             assertEquals(3, pipe.hadPrepared.stream().filter(Boolean::booleanValue).count(), "all three chunks come from measured bytes");
         }
+    }
+
+    /** Stands in for another mod's hook at the head or at the end of {@code PacketEncoder.encode}: one byte of its own. */
+    private static PacketEncoder<ClientGamePacketListener> encoderWithHook(boolean beforeCodec) {
+        return new PacketEncoder<>(RecipeFixtures.protocol()) {
+            @Override
+            protected void encode(ChannelHandlerContext ctx, Packet<ClientGamePacketListener> packet, ByteBuf out) throws Exception {
+                if (beforeCodec) {
+                    out.writeByte(0x7F);
+                }
+                super.encode(ctx, packet, out);
+                if (!beforeCodec) {
+                    out.writeByte(0x55);
+                }
+            }
+        };
+    }
+
+    private record Raw(List<byte[]> frames, List<LogCapture.Entry> log) {}
+
+    /** Sends two books of {@code entries} entries through an encoder with that hook (no framing handlers). */
+    private static Raw sendThroughHookedEncoder(boolean beforeCodec, int entries, boolean encodeOnce, boolean verify) throws Exception {
+        RecipeBookSendInterceptor.encodeOnce = encodeOnce;
+        RecipeBookSendInterceptor.verifyEncodeOnce = verify;
+        RecipeBookSendInterceptor.LOGGED_NOT_KEPT.clear();
+        RecipeBookSplitter.setConfig(TestConfigs.budget(SPLIT_BUDGET));
+        try (TestConnection test = TestConnection.create(encoderWithHook(beforeCodec)); LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            test.connection().send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(entries), true));
+            test.connection().send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(entries), false));
+            test.channel().runPendingTasks();
+            List<byte[]> frames = new ArrayList<>();
+            ByteBuf frame;
+            while ((frame = test.channel().readOutbound()) != null) {
+                frames.add(ByteBufUtil.getBytes(frame));
+                frame.release();
+            }
+            return new Raw(frames, List.copyOf(log.entries()));
+        }
+    }
+
+    /**
+     * Review finding: the kept header was taken from the whole {@code PacketEncoder.encode} output, so a byte that
+     * another mod's hook writes before the codec call was in the header and written a second time with every chunk.
+     * Bytes written around the codec call now keep nothing: the packets are encoded normally, with one INFO line.
+     */
+    @Test
+    void bytesWrittenAroundTheCodecCallAreNotWrittenTwice() throws Exception {
+        for (boolean beforeCodec : new boolean[] {true, false}) {
+            for (int entries : new int[] {1, 5, 200}) {
+                String label = (beforeCodec ? "hook before" : "hook after") + " the codec call, " + entries + " entries";
+                Raw normal = sendThroughHookedEncoder(beforeCodec, entries, false, false);
+                Raw once = sendThroughHookedEncoder(beforeCodec, entries, true, false);
+                Raw verified = sendThroughHookedEncoder(beforeCodec, entries, true, true);
+
+                assertTrue(normal.frames().size() >= 2, label);
+                for (Raw raw : new Raw[] {once, verified}) {
+                    assertEquals(normal.frames().size(), raw.frames().size(), label);
+                    for (int i = 0; i < normal.frames().size(); i++) {
+                        assertArrayEquals(normal.frames().get(i), raw.frames().get(i), label + ": frame " + i);
+                    }
+                    List<String> errors = raw.log().stream().filter(entry -> entry.level() == Level.ERROR).map(LogCapture.Entry::message).toList();
+                    assertEquals(List.of(), errors, label);
+                    // Once, although two books were sent.
+                    List<String> notUsed = raw.log().stream().filter(entry -> entry.level() == Level.INFO)
+                            .map(LogCapture.Entry::message).filter(message -> message.contains("encode once is not used")).toList();
+                    assertEquals(1, notUsed.size(), label + ": " + raw.log());
+                    assertTrue(notUsed.get(0).contains("something besides the codec call writes into the packet buffer"), notUsed.get(0));
+                    assertTrue(raw.log().stream().noneMatch(entry -> entry.message().contains("reused for") && !entry.message().contains("reused for 0 of")), label);
+                }
+                // The hook's byte is there (equal frames above mean: exactly as often as without encode once).
+                byte[] first = once.frames().get(0);
+                assertEquals(beforeCodec ? 0x7F : 0x55, beforeCodec ? first[0] : first[first.length - 1], label);
+            }
+        }
+    }
+
+    /** Measured bytes are the ones the hook around the codec call saw, so the normal case still reuses everything. */
+    @Test
+    void withoutOtherHooksEverythingIsStillReused() throws Exception {
+        RecipeBookSendInterceptor.LOGGED_NOT_KEPT.clear();
+        Sent once = send(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), true), true, SPLIT_BUDGET, -1, null);
+
+        assertTrue(once.frames().size() > 1);
+        assertTrue(once.reportLine().endsWith(reusedNote(once.frames().size())), once.reportLine());
+        assertEquals(List.of(), once.log().stream().filter(entry -> entry.message().contains("encode once is not used")).toList());
+    }
+
+    @Test
+    void notKeptReasonIsLoggedOncePerReason() {
+        try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            RecipeBookSendInterceptor.LOGGED_NOT_KEPT.clear();
+            for (int i = 0; i < 3; i++) {
+                RecipeBookSendInterceptor.logNotKept(EntrySizer.NotKept.NO_CODEC_HOOK);
+            }
+            RecipeBookSendInterceptor.logNotKept(EntrySizer.NotKept.LAYOUT);
+            RecipeBookSendInterceptor.logNotKept(EntrySizer.NotKept.LAYOUT);
+            RecipeBookSendInterceptor.logNotKept(null);
+
+            List<String> infos = log.messages(Level.INFO);
+            assertEquals(2, infos.size(), infos.toString());
+            assertTrue(infos.get(0).startsWith("[RecipeBookSplitter] encode once is not used: the hook around the codec call in PacketEncoder.encode did not run while measuring"), infos.get(0));
+            assertTrue(infos.get(1).startsWith("[RecipeBookSplitter] encode once is not used: a measured recipe book packet does not have the layout"), infos.get(1));
+            assertTrue(infos.get(0).endsWith("as in 1.0.0 (logged once)"), infos.get(0));
+        }
+    }
+
+    /**
+     * Review finding: with the default {@code undeliverableEntries = drop} every one-entry packet (each recipe unlock) is
+     * measured, and keeping its bytes allocated a 256 KiB segment for about 100 bytes: 271 KB and 80-97 us per unlock
+     * against 2 KB and 2-6 us for vanilla's own send.
+     */
+    @Test
+    void oneEntryUnlockPacketsDoNotAllocateASegment() throws Exception {
+        var threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        assumeTrue(threads.isThreadAllocatedMemorySupported(), "no per-thread allocation counter on this JVM");
+        threads.setThreadAllocatedMemoryEnabled(true);
+        RecipeBookSplitter.setConfig(TestConfigs.budget(UNSPLIT_BUDGET));
+        assertEquals(SplitterConfig.UndeliverableEntries.DROP, RecipeBookSplitter.config().undeliverableEntries());
+
+        try (TestConnection test = TestConnection.create(new PacketEncoder<ClientGamePacketListener>(RecipeFixtures.protocol()))) {
+            ClientboundRecipeBookAddPacket unlock = new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(1), false);
+            try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+                test.connection().send(unlock);
+                test.channel().runPendingTasks();
+                assertTrue(log.messages(Level.DEBUG).stream().anyMatch(message -> message.endsWith("sent unsplit" + reusedNote(1))), log.entries().toString());
+            }
+            for (int i = 0; i < 400; i++) {
+                sendAndDrain(test, unlock);
+            }
+
+            int rounds = 200;
+            long before = threads.getCurrentThreadAllocatedBytes();
+            for (int i = 0; i < rounds; i++) {
+                sendAndDrain(test, unlock);
+            }
+            long perPacket = (threads.getCurrentThreadAllocatedBytes() - before) / rounds;
+
+            // About 14 KB (a few encodes, their buffers and the 4 KiB first segment); 271 KB with a 256 KiB segment.
+            assertTrue(perPacket < 100 * 1024, perPacket + " bytes allocated per one-entry packet");
+        }
+    }
+
+    private static void sendAndDrain(TestConnection test, ClientboundRecipeBookAddPacket packet) {
+        test.connection().send(packet);
+        test.channel().runPendingTasks();
+        ByteBuf frame;
+        while ((frame = test.channel().readOutbound()) != null) {
+            frame.release();
+        }
+        test.recorder().messages.clear();
     }
 }

@@ -135,12 +135,14 @@ write_config() {
 }
 
 # prepare_velocity <W> <S> [velocity compression-threshold]: Velocity's first run only generates velocity.toml and
-# forwarding.secret; patch them for the scenario and give the backend the secret.
+# forwarding.secret; patch them for the scenario and give the backend the secret. The first run listens on the proxy
+# port (--port): without it Velocity would bind its default 0.0.0.0:25565 for that second, whatever E2E_PROXY_PORT says,
+# and fail to start if something else holds 25565.
 prepare_velocity() {
   local v=$1/velocity
   mkdir -p "$v"
   cp "$E2E_CACHE/$VELOCITY" "$v/velocity.jar"
-  ( cd "$v" && exec "$VELOCITY_JAVA" -Xmx512M -jar velocity.jar > first-run.log 2>&1 < "$E2E_STDIN" ) &
+  ( cd "$v" && exec "$VELOCITY_JAVA" -Xmx512M -jar velocity.jar --port "$PROXY_PORT" > first-run.log 2>&1 < "$E2E_STDIN" ) &
   local pid=$!
   wait_for 'Done \(' "$v/first-run.log" 1 90 "$pid" || { kill "$pid" 2>/dev/null; die "Velocity did not start, see $v/first-run.log"; }
   kill "$pid"

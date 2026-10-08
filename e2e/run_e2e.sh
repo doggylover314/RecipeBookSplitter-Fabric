@@ -19,7 +19,7 @@ e2e_defaults
 
 CORE_SCENARIOS=(E0 E0b E1 E1v E1o E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c E7d E7e E8 E8b E8x E8c E8d E8e E9 E9b E9s L1 L2 L3 L4 L5 L6)
 POLYMER_SCENARIOS=(P0 P1 P1b P2 P3 P4 P4v P5 P6 P7 PV PR1 PR2 PR2v PR3 PL1 PL2)
-VIA_SCENARIOS=(VB0 VB0b V1 V1b V2 V3 V3b V4 V5 VC VW1 VW2)
+VIA_SCENARIOS=(VB0 VB0b V1 V1b V2 V3 V3b V4 V5 VC VW1 VW2 VW3 VW3x)
 PERF_SCENARIOS=(X1 X1b X1c)
 
 # Presets of the scenario groups.
@@ -149,6 +149,12 @@ define_scenario() {
           DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --repeat 2200); COMP=-1; MAX_CHUNK=1500000; NEWER_PROTOCOL=776 ;;
     VW2)  via_preset; DESC="as VW1 with the default budget 1,048,576"
           DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --repeat 2200); COMP=-1; NEWER_PROTOCOL=776 ;;
+    VW3)  via_preset; DESC="worst case with direct item lists: 5,994 recipes whose every slot is a direct list of the 27 growth items (+63 % under translation); 26.2 client, compression off, default budget: must not disconnect"
+          DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; NEWER_PROTOCOL=776
+          PHASES=(newer/give newer/relog) ;;
+    VW3x) via_preset; DESC="VW3 at the ceiling 1,500,000: documents a limit, the 26.2 client IS disconnected (a 1.5 MB chunk becomes 2.4 MB, over the 2,097,151-byte frame)"
+          KIND=baseline; DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; MAX_CHUNK=1500000
+          NEWER_PROTOCOL=776; PHASES=(newer/give newer/relog) ;;
 
     X1)  perf_preset; DESC="latency: ten take/give cycles of the whole book while another connection is pinged every 10 ms, one event-loop thread, compression 256" ;;
     X1b) perf_preset; DESC="as X1, compression off"; COMP=-1 ;;

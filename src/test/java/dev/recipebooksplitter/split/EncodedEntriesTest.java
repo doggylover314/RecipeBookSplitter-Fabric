@@ -117,6 +117,54 @@ class EncodedEntriesTest {
         }
     }
 
+    @Test
+    void smallPacketsAllocateOnlyWhatTheyNeed() {
+        // Every recipe unlock is a packet of one entry of about 100 bytes: it must not cost a full 256 KiB segment.
+        EncodedEntries one = store(1);
+        byte[] entry = entryBytes(0, 100);
+        append(one, entry);
+        assertEquals(EncodedEntries.FIRST_SEGMENT_BYTES, one.capacityBytes());
+        assertTrue(EncodedEntries.FIRST_SEGMENT_BYTES * 16 <= EncodedEntries.SEGMENT_BYTES);
+
+        ByteBuf out = Unpooled.buffer();
+        one.writePacket(out, new int[] {0}, true, one.packetBytes(new int[] {0}));
+        assertArrayEquals(packet(new byte[][] {entry}, new int[] {0}, true), ByteBufUtil.getBytes(out));
+        out.release();
+
+        EncodedEntries none = store(0);
+        assertEquals(0, none.capacityBytes());
+    }
+
+    @Test
+    void firstSegmentDoublesAndLaterSegmentsAreFull() {
+        int segment = EncodedEntries.SEGMENT_BYTES;
+        int first = EncodedEntries.FIRST_SEGMENT_BYTES;
+        // Sizes that end just under and just over the doubling points, then cross the first border and fill a second.
+        int[] prefix = {first - 1, 2, first, 1, 2 * first, 3, 20_000};
+        int filler = segment - Arrays.stream(prefix).sum() - 8; // leaves 8 bytes of the first segment free
+        int[] sizes = Arrays.copyOf(prefix, prefix.length + 5);
+        System.arraycopy(new int[] {filler, 1, 5, segment, 9}, 0, sizes, prefix.length, 5);
+        EncodedEntries store = store(sizes.length);
+        byte[][] entries = new byte[sizes.length][];
+        long total = 0;
+        for (int i = 0; i < sizes.length; i++) {
+            entries[i] = entryBytes(i, sizes[i]);
+            append(store, entries[i]);
+            total += sizes[i];
+            long expected = total <= segment
+                    ? Math.max(first, Long.highestOneBit(total - 1) << 1)
+                    : segment * ((total + segment - 1) / segment);
+            assertEquals(expected, store.capacityBytes(), "after entry " + i + " (" + total + " bytes kept)");
+            // The kept bytes survive every growth.
+            int[] soFar = java.util.stream.IntStream.rangeClosed(0, i).toArray();
+            ByteBuf out = Unpooled.buffer();
+            store.writePacket(out, soFar, false, store.packetBytes(soFar));
+            assertArrayEquals(packet(Arrays.copyOf(entries, i + 1), soFar, false), ByteBufUtil.getBytes(out), "after entry " + i);
+            out.release();
+        }
+        assertTrue(total > segment, "the test crosses the first border");
+    }
+
     /** What the encoder writes for these entries, assembled the slow way. */
     private static byte[] packet(byte[][] entries, int[] list, boolean replace) {
         ByteBuf head = Unpooled.buffer();

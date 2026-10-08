@@ -52,6 +52,7 @@ class ConnectionLimitsTest {
     @AfterEach
     void tearDown() {
         RecipeBookSplitter.setConfig(SplitterConfig.DEFAULTS);
+        ConnectionLimits.compressionLimitMayBeLifted = false;
     }
 
     @Test
@@ -105,6 +106,36 @@ class ConnectionLimitsTest {
         assertEquals(-1, refused.frameBytes());
         // The 8 MiB test comes first, even where the packet is also below a (huge) threshold.
         assertFalse(new ConnectionLimits(ConnectionLimits.Mode.COMPRESSED, 10_000_000).check(8_388_609, NEVER).sendable());
+    }
+
+    /**
+     * Packet Fixer lifts the 8,388,608-byte check inside the vanilla {@code CompressionEncoder}, which the handler class
+     * does not show. A packet over that size is then decided by its frame alone, and whether it is sent is unknown.
+     */
+    @Test
+    void whereTheCompressionLimitMayBeLiftedOnlyTheFrameDecides() throws Exception {
+        ConnectionLimits.compressionLimitMayBeLifted = true;
+
+        ConnectionLimits.Verdict zeros = ON.check(9_000_000, () -> Unpooled.wrappedBuffer(new byte[9_000_000]));
+        assertNull(zeros.sendable(), "not certainly unsendable: a mod may send it");
+        assertFalse(zeros.certainlyUnsendable());
+        assertTrue(zeros.frameBytes() > 4 && zeros.frameBytes() < 20_000, "frame " + zeros.frameBytes());
+        assertEquals("it is over 8,388,608 bytes, which network compression refuses unless a mod such as Packet Fixer lifts that limit, so whether this connection can send it is unknown", zeros.reason());
+
+        byte[] random = new byte[9_000_000];
+        new java.util.Random(1).nextBytes(random);
+        ConnectionLimits.Verdict incompressible = ON.check(9_000_000, () -> Unpooled.wrappedBuffer(random));
+        assertTrue(incompressible.certainlyUnsendable(), "the frame limit still holds");
+        assertTrue(incompressible.reason().startsWith("it compresses to a 9,0"), incompressible.reason());
+
+        // Nothing changes at or below the limit, or without compression.
+        assertTrue(ON.check(8_388_608, () -> Unpooled.wrappedBuffer(new byte[8_388_608])).sendable());
+        assertTrue(ON.check(2_000_000, NEVER).sendable());
+        assertTrue(OFF.check(2_097_151, NEVER).sendable());
+        assertFalse(OFF.check(2_097_152, NEVER).sendable());
+
+        ConnectionLimits.compressionLimitMayBeLifted = false;
+        assertFalse(ON.check(9_000_000, NEVER).sendable(), "without such a mod it is refused without encoding");
     }
 
     @Test

@@ -260,6 +260,10 @@ def check_mod_log(report, scenario, lines):
     if encode_once != "any":
         report.check(bool(ENCODE_OFF_RE.search(text)) == (encode_once == "off"), f"the 'encode once is off' startup line is {'' if encode_once == 'off' else 'not '}logged")
         report.check(bool(VERIFY_ON_RE.search(text)) == (encode_once == "verified"), f"the 'verifyEncodeOnce is on' startup line is {'' if encode_once == 'verified' else 'not '}logged")
+    if encode_once in ("reused", "verified"):
+        # logged once when the bytes of a measurement cannot be kept: the hook around the codec call did not run, or
+        # something else writes into the packet buffer in PacketEncoder.encode
+        report.check("[RecipeBookSplitter] encode once is not used" not in text, "no 'encode once is not used' line (the measured bytes could be kept)")
     return loaded
 
 
@@ -470,7 +474,7 @@ def run_config_checks(report, scenario, all_lines, config_path):
     loaded = next((m[1] for line in all_lines if (m := LOADED_RE.search(line))), "")
     unchanged = lambda: report.check(on_disk == initial_path.read_text(), "the config file was left as written")
     below = "(every chunk makes the client rebuild its recipe book)"
-    above = "(a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to add up to 25%)"
+    above = "(a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to grow a chunk by up to 63%)"
     if check == "created":
         report.check("[RecipeBookSplitter] created default config" in text, "default config file was created (log line)")
         report.check(on_disk == DEFAULT_CONFIG, "the created file has the documented default content")

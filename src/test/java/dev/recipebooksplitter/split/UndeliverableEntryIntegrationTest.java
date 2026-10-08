@@ -43,6 +43,7 @@ class UndeliverableEntryIntegrationTest {
     void tearDown() {
         RecipeBookSendInterceptor.encodeOnce = true;
         RecipeBookSendInterceptor.debugDigest = false;
+        ConnectionLimits.compressionLimitMayBeLifted = false;
         RecipeBookSplitter.setConfig(SplitterConfig.DEFAULTS);
     }
 
@@ -151,6 +152,32 @@ class UndeliverableEntryIntegrationTest {
             List<String> warnings = log.messages(Level.WARN);
             assertTrue(warnings.stream().anyMatch(w -> w.contains("display id 42") && w.contains("network compression lets this connection send it")),
                     warnings.toString());
+        }
+    }
+
+    /**
+     * Review finding: Packet Fixer lifts the 8 MiB check inside the vanilla encoder, so "drop" must not decide on that
+     * size alone. The test pipeline is vanilla and still refuses the entry; what is checked is the mod's decision.
+     */
+    @Test
+    void entryOverEightMiBIsNotLeftOutWhereTheCompressionLimitMayBeLifted() throws Exception {
+        config(UndeliverableEntries.DROP);
+        ConnectionLimits.compressionLimitMayBeLifted = true;
+        List<Entry> entries = List.of(RecipeFixtures.entry(100, 100, (byte) 0), RecipeFixtures.entry(101, 9_000_000, (byte) 0),
+                RecipeFixtures.incompressibleEntry(102, 3_000_000, (byte) 0));
+        try (VanillaPipeline pipe = new VanillaPipeline(256, false); LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            pipe.connection.send(new ClientboundRecipeBookAddPacket(entries, false));
+            pipe.channel.runPendingTasks();
+
+            List<Integer> handedToTheEncoder = pipe.recorder.messages.stream().filter(ClientboundRecipeBookAddPacket.class::isInstance)
+                    .flatMap(p -> ((ClientboundRecipeBookAddPacket) p).entries().stream()).map(e -> e.contents().id().index()).toList();
+            assertEquals(List.of(100, 101), handedToTheEncoder, "the 9 MB entry is sent, the 3 MB random one cannot pass any frame");
+            List<String> errors = log.messages(Level.ERROR);
+            assertEquals(1, errors.size(), errors.toString());
+            assertTrue(errors.get(0).contains("display id 102") && errors.get(0).contains("compresses to a"), errors.get(0));
+            List<String> warnings = log.messages(Level.WARN);
+            assertTrue(warnings.stream().anyMatch(w -> w.contains("display id 101")
+                    && w.endsWith("; it is over 8,388,608 bytes, which network compression refuses unless a mod such as Packet Fixer lifts that limit, so whether this connection can send it is unknown")), warnings.toString());
         }
     }
 

@@ -21,6 +21,12 @@ import org.jspecify.annotations.Nullable;
 public final class EncodedEntries {
     /** Below G1's humongous threshold (half a region), and G1 regions are at least 1 MiB. */
     static final int SEGMENT_BYTES = 256 * 1024;
+    /**
+     * The first segment starts this small and doubles up to {@link #SEGMENT_BYTES}, so that the many packets with one
+     * or a few entries (every recipe unlock is one) do not allocate and zero 256 KiB for about 100 bytes. A packet that
+     * needs a second segment is a big one, and its later segments are allocated at full size.
+     */
+    static final int FIRST_SEGMENT_BYTES = 4 * 1024;
 
     private final byte[] header;
     private final byte replaceFalse;
@@ -77,15 +83,48 @@ public final class EncodedEntries {
         for (int done = 0; done < length; ) {
             int segment = (int) (size / SEGMENT_BYTES);
             int offset = (int) (size % SEGMENT_BYTES);
-            if (segment == segments.size()) {
-                segments.add(new byte[SEGMENT_BYTES]);
-            }
             int n = Math.min(length - done, SEGMENT_BYTES - offset);
-            src.getBytes(index + done, segments.get(segment), offset, n);
+            src.getBytes(index + done, segmentWithRoom(segment, offset + n), offset, n);
             done += n;
             size += n;
         }
         starts[++count] = size;
+    }
+
+    /**
+     * The segment, at least {@code needed} bytes long. Only the first segment can be shorter than
+     * {@link #SEGMENT_BYTES}; it doubles (a power of two from {@link #FIRST_SEGMENT_BYTES} to {@link #SEGMENT_BYTES}).
+     * {@code copy} reads below {@code size} only, which is always inside what was allocated here.
+     */
+    private byte[] segmentWithRoom(int segment, int needed) {
+        if (segment > 0) {
+            if (segment == segments.size()) {
+                segments.add(new byte[SEGMENT_BYTES]);
+            }
+            return segments.get(segment);
+        }
+        if (segments.isEmpty()) {
+            segments.add(new byte[FIRST_SEGMENT_BYTES]);
+        }
+        byte[] first = segments.get(0);
+        if (first.length < needed) {
+            int capacity = first.length;
+            while (capacity < needed) {
+                capacity *= 2;
+            }
+            first = Arrays.copyOf(first, capacity);
+            segments.set(0, first);
+        }
+        return first;
+    }
+
+    /** How many bytes of storage this holds (allocated, not just used). */
+    long capacityBytes() {
+        long sum = 0;
+        for (byte[] segment : segments) {
+            sum += segment.length;
+        }
+        return sum;
     }
 
     /** Size of the packet {@link #writePacket} produces for these entries: header, count, entries and flag. */

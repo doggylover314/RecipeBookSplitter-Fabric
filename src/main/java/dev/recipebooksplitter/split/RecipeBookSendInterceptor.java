@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -81,6 +83,8 @@ public final class RecipeBookSendInterceptor {
     private static final ThreadLocal<Resend> RESENDING = new ThreadLocal<>();
     /** Package-private so tests can reset it. */
     static final AtomicBoolean WARNED_NO_ENCODER = new AtomicBoolean();
+    /** The reasons for not keeping measured bytes that were logged already: each is reported once. Package-private so tests can reset it. */
+    static final Set<EntrySizer.NotKept> LOGGED_NOT_KEPT = ConcurrentHashMap.newKeySet();
 
     private RecipeBookSendInterceptor() {}
 
@@ -384,6 +388,7 @@ public final class RecipeBookSendInterceptor {
         List<ClientboundRecipeBookAddPacket.Entry> entries = packet.entries();
         EntrySizer.Measurement measurement = EntrySizer.measure(entries, probe.writer(), debugDigest, encodeOnce);
         EncodedEntries kept = measurement.encoded();
+        logNotKept(measurement.notKept());
         int fixed = measurement.fixedOverheadBytes();
         int[] sizes = measurement.entryBytes();
 
@@ -427,6 +432,22 @@ public final class RecipeBookSendInterceptor {
                 : debugDigest ? EntrySizer.measure(sent, probe.writer(), true, false).sha256() : null;
         return new Split(packet, packets, prepare(packets, plan, sentIndex, kept, probe.encoder()), measurement, plan,
                 issues, count, ChunkPlanner.packetBytes(fixed, count, sentSum), sentSha256);
+    }
+
+    /**
+     * Encode once is on but the measured bytes cannot be kept: say why, once per reason, because the cause is another
+     * mod and the only visible effect is the "reused for 0 of N packets" ending of the split lines.
+     */
+    static void logNotKept(EntrySizer.@Nullable NotKept reason) {
+        if (reason == null || !LOGGED_NOT_KEPT.add(reason)) {
+            return;
+        }
+        String why = switch (reason) {
+            case NO_CODEC_HOOK -> "the hook around the codec call in PacketEncoder.encode did not run while measuring (for example because another mod replaced that method)";
+            case OUTSIDE_CODEC -> "something besides the codec call writes into the packet buffer in PacketEncoder.encode, or the codec is called more than once (another mod's hook?)";
+            case LAYOUT -> "a measured recipe book packet does not have the layout packet id, count, entries, replace flag";
+        };
+        LOGGER.info("[RecipeBookSplitter] encode once is not used: {}. Recipe book packets are encoded again after measuring, as in 1.0.0 (logged once)", why);
     }
 
     /** The bytes of a packet with just this entry, written from the kept ones. */
@@ -522,7 +543,8 @@ public final class RecipeBookSendInterceptor {
                 LOGGER.error("[RecipeBookSplitter] {}: recipe display entry #{} (display id {}, recipe {}) is {} bytes on its own and this connection cannot send it ({}); sending it anyway because undeliverableEntries is \"send\", so the player will be disconnected",
                         player, issue.index(), issue.displayId().index(), recipe, Sizes.bytes(issue.packetBytes()), verdict.reason());
             } else {
-                String note = issue.packetBytes() <= ConnectionLimits.FRAME_LIMIT_BYTES ? ""
+                String note = verdict.sendable() == null && verdict.reason() != null ? "; " + verdict.reason()
+                        : issue.packetBytes() <= ConnectionLimits.FRAME_LIMIT_BYTES ? ""
                         : verdict.sendable() == null ? "; this connection's compression or framing is not vanilla's, so whether it can send more than 2,097,151 bytes is unknown"
                         : "; network compression lets this connection send it, but a proxy or client that receives it uncompressed cannot";
                 LOGGER.warn("[RecipeBookSplitter] {}: recipe display entry #{} (display id {}, recipe {}) is {} bytes on its own, more than maxChunkBytes ({}); sending it in a chunk by itself{}",

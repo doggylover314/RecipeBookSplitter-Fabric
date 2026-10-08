@@ -2,6 +2,7 @@ package dev.recipebooksplitter.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import dev.recipebooksplitter.split.EntrySizer;
 import dev.recipebooksplitter.split.OversizedPacketLogger;
 import dev.recipebooksplitter.split.PreparedPacket;
 import dev.recipebooksplitter.split.RecipeBookSendInterceptor;
@@ -33,14 +34,23 @@ public abstract class PacketEncoderMixin {
      * packets: other mods' hooks before and after it, the debug log, JFR's onPacketSent with the real size and
      * ProtocolSwapHandler. Every clientbound packet passes through here; for all but recipe_book_add the cost is one
      * instanceof. With require = 0 a mixin that cannot be applied (the call is gone, or another mod overwrote the
-     * method) only means that nothing is reused and the packets are encoded as in 1.0.0; the split log line then
-     * says "reused for 0 of N packets".
+     * method) only means that nothing is reused and the packets are encoded as in 1.0.0. The measuring notices: while
+     * it encodes its probes this hook reports where the codec call wrote its bytes (EntrySizer.noteCodecSpan), and
+     * bytes are only kept if that was the whole packet. So a hook that did not run (nothing is kept, one INFO line) and
+     * bytes that another mod writes around the codec call (they would end up in the kept header; nothing is kept
+     * either) both fall back to the normal encode.
      */
     @WrapOperation(method = "encode(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;Lio/netty/buffer/ByteBuf;)V",
             at = @At(value = "INVOKE", target = "Lnet/minecraft/network/codec/StreamCodec;encode(Ljava/lang/Object;Ljava/lang/Object;)V"),
             require = 0)
     private void recipebooksplitter$encodeOnce(StreamCodec<?, ?> codec, Object buf, Object packet, Operation<Void> original) {
         if (packet instanceof ClientboundRecipeBookAddPacket recipeBookAdd && buf instanceof ByteBuf out) {
+            if (EntrySizer.isMeasuring()) {
+                int start = out.writerIndex();
+                original.call(codec, buf, packet);
+                EntrySizer.noteCodecSpan(start, out.writerIndex());
+                return;
+            }
             PreparedPacket prepared = RecipeBookSendInterceptor.preparedFor(this, recipeBookAdd);
             if (prepared != null && prepared.write(out, () -> original.call(codec, buf, packet))) {
                 return;

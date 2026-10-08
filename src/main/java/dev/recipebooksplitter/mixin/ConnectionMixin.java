@@ -36,9 +36,11 @@ public abstract class ConnectionMixin {
      *
      * order = 1500 puts us behind any default-order (1000) HEAD injection another mod may add here, so that we
      * see the packet in its final form. @Inject's order attribute exists since sponge-mixin 0.15.0 (bundled from
-     * Fabric Loader 0.16.0 on). fabric.mod.json requires Loader 0.19.0 because that is the oldest Loader this mod was
-     * tested on (0.19.0, 0.19.3 and 0.19.5, each on Java 21 and 25), and because PacketEncoderMixin uses MixinExtras'
-     * @WrapOperation, which Loader 0.19.0 bundles (MixinExtras 0.5.3; Loader 0.19.5 bundles 0.5.5).
+     * Fabric Loader 0.16.0 on), so it is not what sets the Loader floor. fabric.mod.json requires Loader 0.19.0 because
+     * that is the oldest Loader that was tested: the 1.0.0 jar (which had no @WrapOperation) on 0.19.0, 0.19.3 and
+     * 0.19.5, each on Java 21 and 25. PacketEncoderMixin of 1.1.0 uses MixinExtras' @WrapOperation, which Loader 0.19.0
+     * bundles (MixinExtras 0.5.3; Loader 0.19.5 bundles 0.5.5). The 1.1.0 jar has only run on Loader 0.19.5; running it
+     * on 0.19.0 (MixinExtras 0.5.3) is still to be verified (README, "Pending verification").
      */
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V",
             at = @At("HEAD"), cancellable = true, order = 1500)

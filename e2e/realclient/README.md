@@ -62,8 +62,8 @@ access for the first run. Set `E2E_STDIN` to an empty file where `/dev/null` is 
 
 - The Gradle distribution is pinned by `distributionSha256Sum` in the root `gradle/wrapper/gradle-wrapper.properties`.
 - Every Gradle-resolved artifact of this project (Loom, Fabric Loader, Mixin, MixinExtras, ...) is pinned by
-  `gradle/verification-metadata.xml` (SHA-256). After changing a version, regenerate it with
-  `../../gradlew -p e2e/realclient --write-verification-metadata sha256 compileJava generateDLIConfig`.
+  `gradle/verification-metadata.xml` (SHA-256). After changing a version, regenerate it, from the repository root, with
+  `./gradlew -p e2e/realclient --write-verification-metadata sha256 compileJava generateDLIConfig`.
 - Minecraft's client jar, libraries and assets are downloaded by Loom from Mojang and checked by Loom against the SHA-1
   values of Mojang's version manifest; they are not pinned by SHA-256 here.
 - The server side (server template, Fabric API, Polymer, FabricProxy-Lite, Velocity, JRE 25) comes from the kit's

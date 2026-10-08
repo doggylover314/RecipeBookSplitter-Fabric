@@ -236,6 +236,55 @@ class BundleSplitIntegrationTest {
         assertEquals(BundlerInfo.BUNDLE_SIZE_LIMIT + 1, pipe.readFrames().size());
     }
 
+    /** Number of chunks the 400-entry book splits into when sent alone in a bundle. */
+    private int chunkCountOfBook() throws Exception {
+        try (VanillaPipeline probe = new VanillaPipeline(-1, false)) {
+            probe.connection.send(new ClientboundBundlePacket(List.of(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), false))));
+            probe.channel.runPendingTasks();
+            return books(probe.recorder.messages.get(0)).size();
+        }
+    }
+
+    private ClientboundBundlePacket bundleOfRebuiltSize(int fillerPlusChunks, int k) {
+        List<Packet<? super ClientGamePacketListener>> subs = new ArrayList<>();
+        for (int i = 0; i < fillerPlusChunks - k; i++) {
+            subs.add(motion(i));
+        }
+        subs.add(new ClientboundRecipeBookAddPacket(RecipeFixtures.entries(400), false));
+        return new ClientboundBundlePacket(subs);
+    }
+
+    @Test
+    void boundaryExactly4096IsSplitAndAcceptedByClient() throws Exception {
+        int k = chunkCountOfBook();
+        assertTrue(k >= 2, "k=" + k);
+        ClientboundBundlePacket original = bundleOfRebuiltSize(BundlerInfo.BUNDLE_SIZE_LIMIT, k);
+        try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            pipe.connection.send(original);
+            pipe.channel.runPendingTasks();
+            assertEquals(List.of(), log.messages(Level.ERROR));
+        }
+        ClientboundBundlePacket sent = assertInstanceOf(ClientboundBundlePacket.class, pipe.recorder.messages.get(0));
+        assertNotSame(original, sent, "4096 sub-packets is legal: must be split");
+        assertEquals(BundlerInfo.BUNDLE_SIZE_LIMIT, subPackets(sent).size());
+        List<Object> received = reassemble(pipe.readFrames());
+        assertEquals(BundlerInfo.BUNDLE_SIZE_LIMIT, subPackets(received.get(0)).size());
+    }
+
+    @Test
+    void boundary4097IsSentUnsplitWithError() throws Exception {
+        int k = chunkCountOfBook();
+        ClientboundBundlePacket original = bundleOfRebuiltSize(BundlerInfo.BUNDLE_SIZE_LIMIT + 1, k);
+        try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            pipe.connection.send(original);
+            pipe.channel.runPendingTasks();
+            assertEquals(1, log.messages(Level.ERROR).size(), log.messages(Level.ERROR).toString());
+        }
+        assertSame(original, pipe.recorder.messages.get(0));
+        List<Object> received = reassemble(pipe.readFrames());
+        assertTrue(subPackets(received.get(0)).size() <= BundlerInfo.BUNDLE_SIZE_LIMIT);
+    }
+
     @Test
     void bundleForAnotherPlayerIsSplitWhileOursIsWritten() throws Exception {
         try (VanillaPipeline other = new VanillaPipeline(-1, false)) {

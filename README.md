@@ -5,8 +5,12 @@ that players who know thousands of recipes can join.
 
 How to read the evidence in this file: numbers named "1.0.0" were measured with the 1.0.0 jar by investigation runs that
 used the harnesses now in [e2e/](e2e/README.md) (their logs are not in the repository). Numbers named "smoke" come from
-single runs of the 1.1.0 jar while the e2e kit was built. `TBD(verify)` marks what has not been run with 1.1.0 yet; the
-list is under [Pending verification](#pending-verification).
+single runs of the 1.1.0 jar while the e2e kit was built. Numbers named "first encode-once build" come from the tree of
+the first 1.1.0 commit (before bundles and undeliverable entries), which was never released. Numbers from the opt-in
+benchmark are named as such: it runs the mod's code in a unit-test pipeline, not a release jar. Numbers named "review"
+come from checks made while the 1.1.0 code was reviewed (scratch copies of the repository, the kit's scenarios or unit
+tests; not repeated with the release jar). `TBD(verify)` marks what has not been run with 1.1.0 yet; the list is under
+[Pending verification](#pending-verification).
 
 ## What it does
 
@@ -45,8 +49,12 @@ still join (see `undeliverableEntries`).
 - 1.1.0 reuses the bytes it measured (see [How it works](#how-it-works)) through a MixinExtras `@WrapOperation`. The mod
   does not declare MixinExtras: it uses the copy Fabric Loader bundles (0.5.3 in Loader 0.19.0, 0.5.5 in 0.19.5). The
   1.1.0 jar has run with Loader 0.19.5 (MixinExtras 0.5.5) only. `TBD(verify)`: 1.1.0 on Loader 0.19.0 (MixinExtras
-  0.5.3) and on Java 25 at runtime. If the wrap cannot be applied the design is to reuse nothing and encode as 1.0.0
-  did; the split line then ends in `reused for 0 of N packets`. That case has not been provoked in a run.
+  0.5.3) and on Java 25 at runtime. If the wrap cannot be applied (another mod replaced the method or the call), the
+  measuring notices that the hook never ran, keeps nothing, logs one INFO line (`encode once is not used: the hook around
+  the codec call ... did not run while measuring`) and the packets are encoded as 1.0.0 did; the split line then ends in
+  `reused for 0 of N packets`. The measuring side is covered by unit tests. The mixin itself was run with its target
+  removed only in a scratch copy during the review (the bytes on the wire stayed identical; a simulation, not a real
+  conflicting mod and not a server run, and that copy still kept the bytes, which the check now prevents).
 - On Java 25 the server log has JVM warnings about `sun.misc.Unsafe::objectFieldOffset` called by JOML. They come from
   Minecraft's bundled JOML, not from this mod.
 - Server side only. Nothing changes on clients, on Velocity or on other proxies.
@@ -87,7 +95,7 @@ it):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `maxChunkBytes` | `1048576` (1 MiB) | Upper bound for the encoded size of one recipe book packet: packet id plus payload, as the server's packet encoder produces it, before compression and before any ViaVersion translation. Whole numbers only: a value like `1.5` falls back to the default (it is not clamped). Whole numbers are clamped to 262,144 to 1,500,000 with a warning in the log. |
+| `maxChunkBytes` | `1048576` (1 MiB) | Upper bound for the encoded size of one recipe book packet: packet id plus payload, as the server's packet encoder produces it, before compression and before any ViaVersion translation. Whole numbers only: a value like `1.5` falls back to the default (it is not clamped). Whole numbers are clamped to 262,144 to 1,500,000 with a warning in the log. With ViaVersion and no network compression keep the default (see [Chunk size bounds](#chunk-size-bounds)). |
 | `logSplits` | `true` | Log one INFO line every time a packet is split. |
 | `logOversizedPackets` | `false` | Log a WARN line for every clientbound packet (of any type) that encodes to more than 4 MiB, before compression and ViaVersion. Useful to find other packets that are close to the limits. |
 | `undeliverableEntries` | `"drop"` | What to do with a single entry that the connection cannot send even alone: `"drop"` leaves it out, `"send"` sends it anyway (the player is then disconnected). Exactly these two lowercase strings. |
@@ -123,12 +131,26 @@ bytes made a 2,097,348-byte frame and failed. Behind Velocity with `compression-
 frames of 3,997,410 bytes at a 4,000,000 budget, and a vanilla client's frame decoder reads at most three length bytes
 (from its source; not run).
 
-ViaVersion is the reason for the margin. It translated one 1,999,931-byte chunk into 2,507,176 bytes (+25.4 %; the
-whole book grew by 25.3 %) when a 26.2 client joined through ViaFabric, and that disconnected the player with compression
-off. 1,500,000 x 1.254 is about 1.88 MB, below the frame limit. The book that did this is made only of recipes whose item
-ids cross 127 in the 26.1 to 26.2 translation; ordinary data grew by 0 to 0.37 % (see [Compatibility](#compatibility)).
-At the default 1 MiB budget the same worst-case book was delivered (largest translated chunk 1,318,277 bytes). That the
-1,500,000 ceiling delivers it too is `TBD(verify)`: scenario VW1.
+ViaVersion is the reason for the margin, and the margin is not a bound. It translates after the mod has measured, and it
+made chunks bigger by up to 63 % in the two worst-case books that were built (a 26.2 client joining through ViaFabric,
+network compression off; ordinary data grew by 0 to 0.37 %, see [Compatibility](#compatibility)):
+
+- A book of recipes with one item per recipe, made only of items whose ids cross 127 in the 26.1 to 26.2 translation
+  (1.0.0): one 1,999,931-byte chunk became 2,507,176 bytes (+25.4 %; the whole book +25.3 %), which disconnected the
+  player. 1,500,000 x 1.254 is about 1.88 MB, below the frame limit. At the default 1 MiB budget the same book was
+  delivered (largest translated chunk 1,318,277 bytes). That the 1,500,000 ceiling delivers it too is `TBD(verify)`:
+  scenario VW1.
+- A book whose slots are direct lists of those 27 items (review, scenarios VW3x and VW3): each id then appears twice per
+  item, as a 2-byte slot display and as a 1-byte holder-set entry, and each of them grows by a byte, so such an entry
+  grows by up to 2/3 by that arithmetic. At 1,500,000 the largest chunk, 1,499,629 bytes, became 2,416,673 bytes
+  (+61 %) and the player was disconnected (`Packet too large: size 2416673 is over 8`); on relog, 2,422,720 bytes. At
+  the default the largest chunk, 1,048,524 bytes, became 1,706,228 bytes (+62.7 %), below the frame limit, and the book
+  was delivered on give and relog (largest 1,696,235 on relog).
+
+So 1,500,000 is the ceiling for connections where nothing grows the chunks, and with ViaVersion and no compression (or a
+proxy that forwards uncompressed) the default is what the measurements support; 1,250,000 x 1.627 is 2.03 MB by
+arithmetic, which would fit the second book, but that was not run. The same book translated by ViaBackwards or for another
+protocol was not tried.
 
 ### undeliverableEntries
 
@@ -154,6 +176,16 @@ What the decision knows and does not know:
   client that receives it uncompressed may not be able to.
 - If the compression or framing handler is not vanilla's (looked up by the vanilla handler names), whether a packet fits
   is unknown and nothing is left out.
+- A mod that raises a limit inside the vanilla handler classes cannot be seen that way. Packet Fixer 3.3.5 for 1.21.11
+  (`packetfixer-fabric-3.3.5-1.21.11.jar`, SHA-256 `64d5128bd67522edfed81f316b3c8dd65c69081d0a9e4777142e145c42650516`,
+  default config, `allSizesUnlimited`) does. In a unit-level check made in the review and repeated on the final code
+  (vanilla handlers in an `EmbeddedChannel` with its mixins applied; no real server or client) a 9 MB packet of zeros
+  was written as an 8,821-byte frame with the connection staying open, and a client-side compression decoder read it.
+  It does not lift the receiving frame decoder's 3-byte length limit, so a frame over 2,097,151 bytes still fails
+  there. When the mod `packetfixer` is loaded (an INFO line at startup says so), an entry over 8,388,608 bytes is
+  therefore no longer left out for its size alone: only a frame over 2,097,151 bytes after compression leaves it out,
+  and otherwise it is sent with a WARN (whether the encoder sends it depends on that mod's config). Other mods that
+  patch these limits are not recognised; if entries are left out that your setup can deliver, set `"send"`.
 - It does not use the client's own limit. Item components such as `custom_data` are read with a 2 MiB NBT quota, and a
   real client rejected a 4.5 MB entry (`NbtAccounterException: Tried to read NBT tag that was too big; tried to allocate:
   2043742 + 60000 bytes where max allowed: 2097152`) and disconnected (tested with 1.0.0). The quota counts decoded
@@ -183,7 +215,8 @@ behind Velocity (K) and through ViaFabric (VC). It becomes the default only if t
   in. This runs after the listener-level hooks of other mods (Polymer's packet replacing and preventing, its optional
   count-based recipe splitter), and it also covers packets that mods hand directly to the connection.
 - Only `recipe_book_add` packets with at least two entries are looked at. With `"drop"` a packet with one entry is
-  looked at too, because a lone entry may be one that no connection can send; that costs microseconds. A bundle is taken
+  looked at too, because a lone entry may be one that no connection can send; that costs about 7 microseconds and 20 KiB
+  per packet in the benchmark (see [Performance](#performance)). A bundle is taken
   over only if it holds such a packet, and every other bundle (all that vanilla sends) costs one look at each
   sub-packet.
 - To measure, each entry is encoded with the connection's real packet encoder (the same code that will write the packet).
@@ -199,8 +232,10 @@ behind Velocity (K) and through ViaFabric (VC). It becomes the default only if t
   are used only for the exact packet object that this task is writing, to the exact encoder instance that measured it,
   and only once. Anything else (a handler that copies or delays the packet, another connection, a second write of the
   same object) finds nothing and the packet is encoded normally, as 1.0.0 did. Every probe must have the expected layout
-  (packet id, one entry, `replace` flag) or nothing is kept; a packet whose kept bytes do not add up to its planned size
-  is encoded normally, with an ERROR.
+  (packet id, one entry, `replace` flag), and the hook around the codec call must report that the codec call wrote
+  exactly that packet and nothing else wrote into the buffer (a byte that another mod's hook writes before or after the
+  codec call would otherwise sit in the kept header and be written twice); if not, nothing is kept and one INFO line says
+  why. A packet whose kept bytes do not add up to its planned size is encoded normally, with an ERROR.
 - The entries are packed greedily, in order, into chunks that stay within `maxChunkBytes`. If the whole packet fits, the
   original packet object is sent unchanged.
 - The first chunk keeps the `replace` flag of the original (the client clears its recipe book when it is set), all
@@ -254,10 +289,13 @@ Polymer item stack). Vanilla's `Packet too big (is 13445093 ...)` for that book 
   exact for static Polymer items (PolyDecorations 0.10.4, 214 entries, 122,676 bytes) and wrong when the encoding depends
   on the player's packet context. PolyFactory 0.10.4 is a real example: its Server Translations API adds a translation
   fallback to text only inside a packet context, so the bare codec gave 6,063,836 bytes and the real encode 8,053,797
-  (24.7 % more). A mutant of the mod that sized with the bare codec sent PolyFactory packets of up to 1,398,482 bytes at
+  (32.8 % more; a size taken from the bare codec is 24.7 % too small). A mutant of the mod that sized with the bare codec sent PolyFactory packets of up to 1,398,482 bytes at
   the 1 MiB budget. With synthetic player-bound items, compression off and a 2,000,000 budget, the server disconnected
-  the player (`Packet too large: size 2507427 is over 8`). Only the scenarios P4, P5, PR2 and PR3 tell such a mutant
-  from the mod (P1, with static items, passed for both).
+  the player (`Packet too large: size 2507427 is over 8`). In those runs P4, P5 and PR2 told such a mutant from the mod
+  (P1, with static items, passed for both); PR3 would, by computation only (planned on bare sizes, its 262,144-byte
+  budget gives chunks up to 347,466 bytes, which the budget check of the kit rejects). The kit's P5 uses the new ceiling
+  1,500,000, not 2,000,000: planned on bare sizes the largest chunk is then 1,908,244 bytes by computation, over the
+  budget but below the frame limit, so there the mutant fails the budget check and does not disconnect the player.
 - **Polymer's own count-based splitter** (`split_recipe_book_packet_amount`, default -1): keep the default. Set to 500 it
   produced one chunk of 12,179,083 bytes, over 8 MiB on its own. The mod split that chunk into 12 packets and passed
   smaller ones whole; every packet the client got was within 1 MiB and every recipe arrived once.
@@ -266,8 +304,9 @@ Polymer item stack). Vanilla's `Packet too big (is 13445093 ...)` for that book 
   full PL1 and PL2 runs, including whether PolyFactory's `de_de` book differs from the `en_us` one.
 - **Encode once with Polymer items.** Reusing the bytes of a lone-entry probe is only correct if an entry encodes to the
   same bytes inside a chunk. For vanilla items with Polymer loaded that held in a unit-test prototype with Polymer's codec
-  wrappers active and in smoke E1v (9 of 9 packets verified against a normal encode). For Polymer items and PolyFactory:
-  `TBD(verify)`: P4v and PR2v (`verifyEncodeOnce`, no mismatch).
+  wrappers active and in an E1 run with `verifyEncodeOnce` on the first encode-once build (9 of 9 packets verified against
+  a normal encode; that build's jar still said 1.0.0 and had no bundle or undeliverable-entry code). E1v with the 1.1.0
+  jar is `TBD(verify)`, and so are P4v and PR2v (`verifyEncodeOnce`, no mismatch) for Polymer items and PolyFactory.
 - Not tested: a Polymer client mod, a Polymer resource pack, other Polymer-based mods than PolyDecorations and
   PolyFactory.
 
@@ -285,7 +324,8 @@ clients:
 | 9.2 MB book, 26.1 client | +0 bytes |
 | 9.2 MB book, 26.2 client | +323 bytes (+0.0035 %) |
 | 61,617 small recipes (one 3x3 recipe per item, 40 times), 26.2 client | +20,843 bytes (+0.37 %) |
-| 59,400 recipes made only of the 27 items whose id passes 127 in that step, 26.2 client | +25.3 % (one chunk 1,999,931 to 2,507,176 bytes) |
+| 59,400 recipes made only of the 27 items whose id passes 127 in that step, 26.2 client | +25.3 % for the book, +25.4 % for the worst chunk (1,999,931 to 2,507,176 bytes) |
+| 5,994 recipes whose every slot is a direct list of those 27 items, 26.2 client (review) | +62.7 % for the largest chunk at the default (1,048,524 to 1,706,228 bytes); +61 % at 1,500,000 (1,499,629 to 2,416,673 bytes: disconnected) |
 | 9.2 MB book, protocol 777 (26.3) | +709 bytes, but only with a locally patched ViaFabric 0.4.22+184 that is not distributed |
 
 - With the mod there was no disconnect in any ordinary scenario: compression 256 and off, budgets 1,048,576 and
@@ -294,7 +334,9 @@ clients:
   and on relog, and stayed connected for 35 to 45 seconds with no disconnect or decode error in their logs. What their
   recipe book contained was not inspected.
 - Smoke (1.1.0): V1 passed, with translated sizes equal to the control (growth 0). `TBD(verify)`: V1b, V2 to V5, VC
-  (`bundleChunks` through ViaVersion), VW1 and VW2, and the 26.1 baselines VB0 and VB0b.
+  (`bundleChunks` through ViaVersion), VW1 to VW3x, and the 26.1 baselines VB0 and VB0b. VW3 and VW3x are the review
+  run of the direct-list book as kit scenarios; their checkers pass on that run's output, the scenarios themselves have
+  not been run.
 - **ViaFabric 0.4.21+168 and every later 1.21.11 build up to 0.4.22+184 do not start on Java 21 or 25**
   (`NoSuchMethodError ... J_L_Runtime$Version.feature`). This is a ViaFabric packaging problem and not this mod's: the
   shaded JvmDowngrader stub class is an empty class in `META-INF/versions/9` of the jar, and it still has no methods when
@@ -321,26 +363,34 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
 
 ## Performance
 
-- Per packet in general: one `instanceof` check in the send hook and one in the encode hook (plus one volatile read of the
-  configuration there, for `logOversizedPackets`). In a micro-benchmark of the prototype the encode hook cost nothing
+- Per packet in general: two `instanceof` checks in the send hook (recipe book add, bundle) and one in the encode hook
+  (plus one volatile read of the configuration there, for `logOversizedPackets`, and a thread-local read for recipe book
+  adds). A bundle is also scanned for recipe book packets, one look at each sub-packet. In a micro-benchmark of the prototype the encode hook cost nothing
   measurable: 41.7 to 43.5 ns per encode with it, 40.7 to 43.5 ns without. Recipe book adds below the minimum entry
   count are passed on after a few field reads.
 - **Measuring is not free, and encode once makes it cheap.** Every recipe book add that is looked at is encoded once,
   entry by entry, to measure it, on the Netty event loop thread of that connection. 1.0.0 then encoded the chunks a
   second time; 1.1.0 copies the measured bytes, so the codec runs once per entry, as it would for any packet. Benchmark
-  (`EncodeOnceBenchmarkTest`, JDK 21.0.11, 4 CPUs, median of 30 interleaved rounds after 10 warm-up rounds, in ms): V is
-  vanilla's single encode of the unsplit packet, 1.0.0 and 1.1.0 are the whole send through `Connection.send` into an
-  encoder, and "+ compression" adds the vanilla compression handler with threshold 256.
+  (the opt-in `EncodeOnceBenchmarkTest`, run on the 1.1.0 sources after the review fixes, JDK 21.0.11, 4 CPUs, load
+  average 1.4 to 1.9 during the run, median of 30 interleaved rounds after 10 warm-up rounds, in ms): V is vanilla's
+  single encode of the unsplit packet; "reuse off" is the whole send through `Connection.send` into an encoder with
+  `-Drecipebooksplitter.encodeOnce=false`, which does what 1.0.0 did (measure, split, encode every chunk again) but is
+  the current code and not the 1.0.0 jar; "encode once" is the same send with reuse on; "+ compression" adds the vanilla
+  compression handler with threshold 256.
 
-  | Book | V | 1.0.0 | 1.1.0 | 1.0.0 + compression | 1.1.0 + compression |
+  | Book | V | reuse off | encode once | reuse off + compression | encode once + compression |
   |---|---|---|---|---|---|
-  | 4,457 entries, 9.2 MB, split into 9 chunks | 40.29 | 72.06 | 39.45 | 455.49 | 406.60 |
-  | 140,000 tiny entries, split | 225.72 | 459.54 | 244.31 | 560.98 | 355.33 |
-  | 1,457 entries, within the limit | 2.02 | 4.14 | 2.28 | 5.37 | 3.50 |
-  | 1,707 entries with custom data, within the limit | 5.30 | 9.83 | 5.90 | 40.88 | 36.79 |
+  | 4,457 entries, 9.2 MB, split into 9 chunks | 40.73 | 67.90 | 37.51 | 444.86 | 395.01 |
+  | 140,000 tiny entries, split | 227.97 | 447.28 | 236.15 | 544.64 | 336.58 |
+  | 1,457 entries, within the limit | 1.65 | 3.46 | 1.92 | 4.48 | 2.97 |
+  | 1,707 entries with custom data, within the limit | 4.64 | 8.91 | 5.19 | 39.67 | 35.68 |
+  | 1,457 packets of one entry each (a burst of recipe unlocks), all of them | 4.96 | 10.54 | 10.50 | 10.93 | 10.98 |
 
-  For the first book a send allocates 31.96 MiB with 1.1.0 against 45.17 MiB with 1.0.0 (vanilla's own encode: 22.26
-  MiB).
+  For the first book a send allocates 32.64 MiB with encode once against 45.97 MiB with reuse off (vanilla's own encode:
+  22.63 MiB). A packet of one entry, the case of a single recipe unlock, took 7.2 microseconds and 20.1 KiB through the
+  mod (15.7 KiB with reuse off) against 3.4 microseconds and 9.1 KiB for a plain write in the same test pipeline. In
+  the first encode-once build the kept bytes began with a full 256 KiB array, which made that case 271 KB per packet
+  (review, Connection.send in a unit-test pipeline), 100 times what the entry needs; the first array now starts at 4 KiB.
   What remains with compression is vanilla's deflate: on a real server the chunks took 384 to 390 ms to compress
   (1.0.0, warm). The same benchmark on Java 25 is `TBD(verify)`.
 - **What this costs on a real server** (1.0.0, scenario E1 with Polymer loaded, a warm JVM, three runs of ten
@@ -356,7 +406,9 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
   `TBD(verify)`: scenarios X1, X1b and X1c (a second connection pings the server every 10 ms; all connections share one
   event loop thread).
 - **Memory.** The kept bytes are about as large as the entries of the book (9.2 MB for the test book), held in 256 KiB
-  arrays until the task ends. There is no cap, so a bigger book needs that much heap for a moment (not measured).
+  arrays until the task ends. The first array starts at 4 KiB and doubles, so a packet of one or a few entries keeps
+  4 KiB, not 256 KiB (see the cost per unlock above). There is no cap, so a bigger book needs that much heap for a moment
+  (not measured).
 - **The client** rebuilds its recipe book once per chunk. By the client code each rebuild also starts a background build
   of the recipe search index on a pool that also builds chunk meshes. On a fast link the chunks arrive together; over a
   slow link they arrive spread out and every one can start its own build. Cancelling a build skips it if it has not
@@ -387,13 +439,16 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
 
 - The client's 2 MiB NBT quota (see `undeliverableEntries`): a single entry above `maxChunkBytes` that the connection can
   send goes out in a packet of its own with a WARN, and a real client may be unable to read it.
-- ViaVersion translation is not measured at runtime. The 1,500,000 ceiling is what protects against growth: the worst
-  case built (+25.3 %) fits; other translations, such as ViaBackwards for much older clients, were not tried.
+- ViaVersion translation is not measured at runtime, and the 1,500,000 ceiling does not protect against all of its
+  growth: a book of direct item lists grew 61 to 63 % and did not fit at 1,500,000 with compression off (see
+  [Chunk size bounds](#chunk-size-bounds)). With ViaVersion and no compression keep the default. Other translations,
+  such as ViaBackwards for much older clients, were not tried.
 - Whether an entry can be sent is decided on this server's own bytes and handlers (see `undeliverableEntries`), not on a
   proxy's.
 - Encode once assumes that an entry encodes to the same bytes inside a chunk as in its measuring probe. The layout of
-  every probe and the size of every written packet are checked, but a codec whose output depends on the packet around
-  the entry would not be noticed in normal mode. Verify mode finds it, and `encodeOnce=false` switches reuse off.
+  every probe, the span the codec call wrote and the size of every written packet are checked, but a codec whose output
+  depends on the packet around the entry would not be noticed in normal mode. Verify mode finds it, and
+  `encodeOnce=false` switches reuse off.
 - Bundles that would hold more than 4,096 packets after splitting are sent unsplit with an ERROR, so an oversized
   recipe packet in one fails as it does without the mod. A bundle whose sub-packets are not a `Collection` is left alone;
   Fabric API copies every bundle's sub-packets into a list, and without Fabric API this path has no test.
@@ -406,15 +461,18 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
 The items below are not yet tested with 1.1.0. Each one is marked `TBD(verify)` above, and the evidence for 1.0.0 stays
 valid where it is named.
 
-- Build and tests on JDK 21 and JDK 25, a fresh Gradle download against the pinned checksum, and the wrong checksum
-  failing.
+- Build and tests with 1.1.0 on JDK 25 (on JDK 21 `./gradlew build` passes).
 - The benchmark on Java 21 and 25 (table under Performance).
 - The full e2e suite: all core and limit scenarios (including E3b with encode once and L5's chunk count), directly and
   behind Velocity.
 - E1, E1v, E2, E3b, E5, E6, E6b, E8, E8c, E9b with `reused for N of N packets` on Loader 0.19.0 (MixinExtras 0.5.3) and on
   Java 25.
+- That no real-server scenario logs `encode once is not used` (the check that the codec call wrote exactly the packet
+  is new and has only run in unit tests and the Fabric API test runtime): in particular with Polymer (P1, P4, PR2) and
+  Fabric API, whose hooks sit in `PacketEncoder.encode`.
 - Polymer P0 to P7, PV, PR1 to PR3, with P4v and PR2v (no mismatch) and PL1 and PL2 (language change).
-- ViaFabric VB0 to VW2, in particular VW1 (the +25 % worst case is delivered at 1,500,000) and VC.
+- ViaFabric VB0 to VW3x, in particular VW1 (the +25 % worst case is delivered at 1,500,000), VW3 (the +63 % direct-list
+  book is delivered at the default) and VW3x (the same book at 1,500,000 disconnects, as in the review run), and VC.
 - Real server timing and the stall of other players, old jar against new jar (X1, X1b, X1c).
 - Real client: B, C, D, E, G, J, K, then H against I on a throttled link, then B and D with a Java 25 server on Loader
   0.19.0. `bundleChunks` is switched on by default only if H and I show a benefit and nothing fails, and VC and K pass.
@@ -465,15 +523,20 @@ Loom 1.18.3 fails on Gradle 9.5.0 (`plugin.api-version` 9.7.0) and on JDK 21 (`r
   written is still split), closed channels, missing encoders (log levels), a broken packet.
 - `OversizedPacketLoggerTest`: the `logOversizedPackets` warning, including that the measuring probes are not
   reported.
-- `EncodedEntriesTest`, `PreparedPacketTest`, `EncodeOnceIntegrationTest`: the kept bytes, and a vanilla-like pipeline
-  (prepender, optional compression, encoder, unbundler). The frames are identical with and without reuse for replace
-  true and false, split and unsplit, compression off and on, and entries across the storage borders. A handler that
-  copies or delays a packet, another connection, a second write, verify mode, the kill switch and a throwing handler are
-  covered too, and none of them leaves state behind.
+- `EncodedEntriesTest`, `PreparedPacketTest`, `EncodeOnceIntegrationTest`: the kept bytes (a one-entry packet keeps 4 KiB,
+  not a full segment), and a vanilla-like pipeline (prepender, optional compression, encoder, unbundler). The frames are
+  identical with and without reuse for replace true and false, split and unsplit, compression off and on, and entries
+  across the storage borders. A handler that copies or delays a packet, another connection, a second write, verify mode,
+  the kill switch and a throwing handler are covered too, and none of them leaves state behind. So are bytes that another
+  mod's hook writes before or after the codec call (nothing is kept, the frames are those of 1.0.0, one INFO line), a
+  measurement whose hook did not run, and the allocation per one-entry packet (the unlock case).
 - `ConnectionLimitsTest`: the exact limits of a connection, checked against the real `CompressionEncoder` and
-  `Varint21LengthFieldPrepender` at their boundaries.
+  `Varint21LengthFieldPrepender` at their boundaries, and what changes where a mod such as Packet Fixer lifts the
+  8 MiB check.
 - `BundleSplitIntegrationTest`, `UndeliverableEntryIntegrationTest`, `BundleChunksIntegrationTest`: recipe packets
-  split in place inside bundles (including the 4,096 limit), entries left out or sent, and chunks sent in one bundle.
+  split in place inside bundles (both sides of the 4,096 limit: a rebuilt bundle of exactly 4,096 sub-packets is split
+  and a client's bundler accepts it, one of 4,097 is sent unsplit with an ERROR), entries left out or sent, and chunks
+  sent in one bundle.
 
 `EncodeOnceBenchmarkTest` is not part of the build. Run it with
 `./gradlew test -PrbsBench --tests '*EncodeOnceBenchmarkTest' --no-daemon`; `-PrbsBench.rounds`, `-PrbsBench.warmup`

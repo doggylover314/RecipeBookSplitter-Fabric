@@ -60,16 +60,29 @@ public final class RecipeFixtures {
         return protocol;
     }
 
-    /** Writes packets like {@code PacketEncoder.encode} does: the protocol codec, which writes the packet id first. */
-    @SuppressWarnings("unchecked")
+    /**
+     * Writes packets like {@code PacketEncoder.encode} does: the protocol codec, which writes the packet id first. Like
+     * the mod's hook around that codec call, it reports where the codec wrote (what lets a measurement keep the bytes).
+     */
     public static EntrySizer.PacketWriter writer() {
+        EntrySizer.PacketWriter codec = writerWithoutHook();
+        return (packet, out) -> {
+            int start = out.writerIndex();
+            codec.write(packet, out);
+            EntrySizer.noteCodecSpan(start, out.writerIndex());
+        };
+    }
+
+    /** The codec alone, as if the hook around the codec call in {@code PacketEncoder.encode} was not applied. */
+    @SuppressWarnings("unchecked")
+    public static EntrySizer.PacketWriter writerWithoutHook() {
         return (packet, out) -> protocol.codec().encode(out, (Packet<? super ClientGamePacketListener>) packet);
     }
 
     /** The caller releases the returned buffer. */
     public static ByteBuf encode(Packet<?> packet) throws Exception {
         ByteBuf out = Unpooled.buffer();
-        writer().write(packet, out);
+        writerWithoutHook().write(packet, out);
         return out;
     }
 

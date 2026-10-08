@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import dev.recipebooksplitter.split.ChunkPlanner.Chunk;
 import dev.recipebooksplitter.testutil.FakeClientRecipeBook;
@@ -20,9 +21,11 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.VarInt;
+import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
 import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket.Entry;
 import org.junit.jupiter.api.BeforeAll;
@@ -277,7 +280,8 @@ class RecipeBookSplitMinecraftTest {
 
     @Test
     void foreignLayoutKeepsNothing() throws Exception {
-        // A mod that appends something to every packet: the layout "id | count | entries | flag" no longer holds.
+        // A mod that appends something to every packet: the layout "id | count | entries | flag" no longer holds, and
+        // the codec call did not write the whole packet.
         EntrySizer.PacketWriter trailing = (packet, out) -> {
             RecipeFixtures.writer().write(packet, out);
             out.writeByte(0);
@@ -286,6 +290,117 @@ class RecipeBookSplitMinecraftTest {
         EntrySizer.Measurement measurement = EntrySizer.measure(RecipeFixtures.entries(5), trailing, false, true);
 
         assertNull(measurement.encoded());
+        assertEquals(EntrySizer.NotKept.OUTSIDE_CODEC, measurement.notKept());
         assertEquals(5, measurement.entryBytes().length);
+    }
+
+    @Test
+    void unexpectedLayoutInsideTheCodecKeepsNothing() throws Exception {
+        // The codec call itself wrote a different last byte for a one-entry packet: neither replace flag.
+        EntrySizer.PacketWriter odd = (packet, out) -> {
+            RecipeFixtures.writer().write(packet, out);
+            if (((ClientboundRecipeBookAddPacket) packet).entries().size() == 1) {
+                out.setByte(out.writerIndex() - 1, 7);
+            }
+        };
+
+        EntrySizer.Measurement measurement = EntrySizer.measure(RecipeFixtures.entries(5), odd, false, true);
+
+        assertNull(measurement.encoded());
+        assertEquals(EntrySizer.NotKept.LAYOUT, measurement.notKept());
+    }
+
+    /** Another mod's hook at the head of PacketEncoder.encode, or at its end: bytes the codec call did not write. */
+    @Test
+    void bytesWrittenAroundTheCodecCallKeepNothing() throws Exception {
+        List<Entry> entries = RecipeFixtures.entries(5);
+        EntrySizer.Measurement plain = EntrySizer.measure(entries, RecipeFixtures.writer(), false, false);
+        EntrySizer.PacketWriter prefixed = (packet, out) -> {
+            out.writeByte(0x7F);
+            RecipeFixtures.writer().write(packet, out);
+        };
+        EntrySizer.PacketWriter varyingPrefix = new EntrySizer.PacketWriter() {
+            private int counter;
+
+            @Override
+            public void write(Packet<?> packet, ByteBuf out) throws Exception {
+                out.writeByte(++counter & 0x7F);
+                RecipeFixtures.writer().write(packet, out);
+            }
+        };
+        EntrySizer.PacketWriter suffixed = (packet, out) -> {
+            RecipeFixtures.writer().write(packet, out);
+            out.writeByte(0x55);
+        };
+
+        for (EntrySizer.PacketWriter writer : new EntrySizer.PacketWriter[] {prefixed, varyingPrefix, suffixed}) {
+            EntrySizer.Measurement measurement = EntrySizer.measure(entries, writer, false, true);
+
+            assertNull(measurement.encoded());
+            assertEquals(EntrySizer.NotKept.OUTSIDE_CODEC, measurement.notKept());
+            // The sizes are those of the entries, whatever is written around them.
+            assertArrayEquals(plain.entryBytes(), measurement.entryBytes());
+        }
+    }
+
+    @Test
+    void codecCalledTwiceKeepsNothing() throws Exception {
+        EntrySizer.PacketWriter twice = (packet, out) -> {
+            ByteBuf scrap = Unpooled.buffer();
+            RecipeFixtures.writer().write(packet, scrap); // a first codec call, into a buffer of its own
+            scrap.release();
+            RecipeFixtures.writer().write(packet, out);
+        };
+
+        EntrySizer.Measurement measurement = EntrySizer.measure(RecipeFixtures.entries(3), twice, false, true);
+
+        assertNull(measurement.encoded());
+        assertEquals(EntrySizer.NotKept.OUTSIDE_CODEC, measurement.notKept());
+    }
+
+    @Test
+    void withoutTheHookNothingIsKeptAndNoMoreProbesAreSpent() throws Exception {
+        AtomicInteger probes = new AtomicInteger();
+        EntrySizer.PacketWriter codec = RecipeFixtures.writerWithoutHook();
+        EntrySizer.PacketWriter counting = (packet, out) -> {
+            probes.incrementAndGet();
+            codec.write(packet, out);
+        };
+
+        EntrySizer.Measurement without = EntrySizer.measure(RecipeFixtures.entries(5), counting, false, true);
+
+        assertNull(without.encoded());
+        assertEquals(EntrySizer.NotKept.NO_CODEC_HOOK, without.notKept());
+        assertEquals(1 + 5, probes.get(), "no second empty probe for the other replace flag, as nothing is kept");
+        assertEquals(5, without.entryBytes().length);
+        // Not asked to keep anything: no reason either.
+        assertNull(EntrySizer.measure(RecipeFixtures.entries(5), codec, false, false).notKept());
+        assertNull(EntrySizer.measure(RecipeFixtures.entries(5), RecipeFixtures.writer(), false, true).notKept());
+    }
+
+    /**
+     * The 1.1.0 review found 271 KB allocated per one-entry packet (a recipe unlock), 100 times what the entry needs:
+     * the kept bytes started with a 256 KiB segment.
+     */
+    @Test
+    void measuringOneEntryKeepingBytesAllocatesLittle() throws Exception {
+        var threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        assumeTrue(threads.isThreadAllocatedMemorySupported(), "no per-thread allocation counter on this JVM");
+        threads.setThreadAllocatedMemoryEnabled(true);
+        List<Entry> one = RecipeFixtures.entries(1);
+        EntrySizer.PacketWriter writer = RecipeFixtures.writer();
+        for (int i = 0; i < 500; i++) {
+            EntrySizer.measure(one, writer, false, true);
+        }
+
+        int rounds = 200;
+        long before = threads.getCurrentThreadAllocatedBytes();
+        for (int i = 0; i < rounds; i++) {
+            assertNotNull(EntrySizer.measure(one, writer, false, true).encoded());
+        }
+        long perCall = (threads.getCurrentThreadAllocatedBytes() - before) / rounds;
+
+        // About 10 KB with the 4 KiB first segment (the three probe encodes and their buffers are most of it).
+        assertTrue(perCall < 64 * 1024, perCall + " bytes allocated per measured one-entry packet");
     }
 }

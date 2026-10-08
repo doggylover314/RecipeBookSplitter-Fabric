@@ -30,7 +30,9 @@ import org.junit.jupiter.api.Test;
  * Opt-in benchmark (not part of the normal build, see build.gradle): what the mod's whole send task costs for one
  * recipe book, with and without reusing the measured bytes. Run it with
  * {@code ./gradlew test -PrbsBench --tests '*EncodeOnceBenchmarkTest' --no-daemon}, optionally with
- * {@code -PrbsBench.rounds=30 -PrbsBench.warmup=10 -PrbsBench.datasets=book,tiny,small,smallcustom}.
+ * {@code -PrbsBench.rounds=30 -PrbsBench.warmup=10 -PrbsBench.datasets=book,tiny,small,smallcustom,unlocks}. The
+ * dataset {@code unlocks} is a burst of one-entry packets (what a recipe unlock sends, 1,457 of them), and its lines
+ * also give the cost and the allocation per packet.
  *
  * <p>The operations run one after the other in a rotating order within every round, so that machine load and JIT state
  * affect all of them alike, and the differences are taken per round:
@@ -69,34 +71,39 @@ class EncodeOnceBenchmarkTest {
         RecipeBookSplitter.setConfig(SplitterConfig.DEFAULTS);
         int rounds = Integer.getInteger("rbsBench.rounds", 30);
         int warmup = Integer.getInteger("rbsBench.warmup", 10);
-        for (String dataset : System.getProperty("rbsBench.datasets", "book,tiny,small,smallcustom").split(",")) {
+        for (String dataset : System.getProperty("rbsBench.datasets", "book,tiny,small,smallcustom,unlocks").split(",")) {
             List<Entry> entries = switch (dataset) {
                 case "book" -> BenchDataset.book(3_000, 3_000, 1_457, 1L); // about 9.2 MB, 4,457 entries
                 case "tiny" -> BenchDataset.book(0, 0, 140_000, 3L); // very many very small entries
                 case "small" -> BenchDataset.book(0, 0, 1_457, 4L); // as many entries as vanilla has, within the limit
                 case "smallcustom" -> BenchDataset.book(250, 3_000, 1_457, 5L); // custom data, still within the limit
+                case "unlocks" -> BenchDataset.book(0, 0, 1_457, 6L); // sent as 1,457 packets of one entry each
                 default -> throw new IllegalArgumentException("unknown dataset " + dataset);
             };
-            run(dataset, entries, rounds, warmup);
+            run(dataset, entries, dataset.equals("unlocks"), rounds, warmup);
         }
     }
 
-    private void run(String dataset, List<Entry> entries, int rounds, int warmup) throws Exception {
+    /** @param oneEntryPackets send every entry as a packet of its own (an operation then sends all of them) */
+    private void run(String dataset, List<Entry> entries, boolean oneEntryPackets, int rounds, int warmup) throws Exception {
         TestConnection plain = connection(false);
         TestConnection compressed = connection(true);
+        List<ClientboundRecipeBookAddPacket> packets = oneEntryPackets
+                ? entries.stream().map(entry -> new ClientboundRecipeBookAddPacket(List.of(entry), false)).toList()
+                : List.of(new ClientboundRecipeBookAddPacket(entries, false));
         Map<String, Op> ops = new LinkedHashMap<>();
-        ops.put("V", new Op(plain, () -> plain.channel().writeAndFlush(new ClientboundRecipeBookAddPacket(entries, false))));
-        ops.put("M0", new Op(plain, () -> send(plain, entries, false)));
-        ops.put("M1", new Op(plain, () -> send(plain, entries, true)));
-        ops.put("M0c", new Op(compressed, () -> send(compressed, entries, false)));
-        ops.put("M1c", new Op(compressed, () -> send(compressed, entries, true)));
+        ops.put("V", new Op(plain, () -> packets.forEach(plain.channel()::writeAndFlush)));
+        ops.put("M0", new Op(plain, () -> send(plain, packets, false)));
+        ops.put("M1", new Op(plain, () -> send(plain, packets, true)));
+        ops.put("M0c", new Op(compressed, () -> send(compressed, packets, false)));
+        ops.put("M1c", new Op(compressed, () -> send(compressed, packets, true)));
 
         String[] names = ops.keySet().toArray(String[]::new);
         double[][] wallMs = new double[names.length][rounds];
         double[][] allocMib = new double[names.length][rounds];
         Map<String, List<byte[]>> lastFrames = new LinkedHashMap<>();
         long thread = Thread.currentThread().threadId();
-        System.out.printf("BENCH start dataset=%s entries=%,d rounds=%d warmup=%d loadavg=%s%n", dataset, entries.size(), rounds, warmup, loadavg());
+        System.out.printf("BENCH start dataset=%s entries=%,d packets=%,d rounds=%d warmup=%d loadavg=%s%n", dataset, entries.size(), packets.size(), rounds, warmup, loadavg());
         for (int round = -warmup; round < rounds; round++) {
             for (int i = 0; i < names.length; i++) {
                 int op = Math.floorMod(i + round, names.length);
@@ -120,6 +127,10 @@ class EncodeOnceBenchmarkTest {
         for (int op = 0; op < names.length; op++) {
             System.out.printf("BENCH dataset=%s op=%s median_ms=%.2f p90_ms=%.2f alloc_mib=%.2f%n",
                     dataset, names[op], median(wallMs[op]), percentile90(wallMs[op]), median(allocMib[op]));
+            if (packets.size() > 1) {
+                System.out.printf("BENCH dataset=%s op=%s per_packet_us=%.1f alloc_kib_per_packet=%.1f%n",
+                        dataset, names[op], median(wallMs[op]) * 1000 / packets.size(), median(allocMib[op]) * 1024 / packets.size());
+            }
         }
         pair(dataset, names, wallMs, "M1", "M0");
         pair(dataset, names, wallMs, "M1", "V");
@@ -147,9 +158,11 @@ class EncodeOnceBenchmarkTest {
         return test;
     }
 
-    private static void send(TestConnection target, List<Entry> entries, boolean encodeOnce) {
+    private static void send(TestConnection target, List<ClientboundRecipeBookAddPacket> packets, boolean encodeOnce) {
         RecipeBookSendInterceptor.encodeOnce = encodeOnce;
-        target.connection().send(new ClientboundRecipeBookAddPacket(entries, false));
+        for (ClientboundRecipeBookAddPacket packet : packets) {
+            target.connection().send(packet);
+        }
     }
 
     /** Releases what was written, so that every operation starts from the same state; keeps a copy if asked to. */

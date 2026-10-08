@@ -4,6 +4,10 @@ as the result. Every item id then appears about 19 times per recipe entry (9 slo
 any item whose registry id changes its VarInt length when ViaVersion translates the recipe book for a newer client makes
 the packet grow, as much as it can for item ids. Small entries (about 80 bytes), unlike gen_datapack.py's 2 KB ones.
 
+With --lists every slot takes the whole --only list as a direct list of items (not a tag), so each of those ids appears
+twice per item in the entry (as an item slot display and as an ingredient entry): with the 27 items whose id passes
+127 the entries grow by about 63 % under translation, against about 25 % for one item per recipe.
+
 The items come from --only (a file with one item id per line, or a comma-separated list; they are not validated), or
 from the registries report of the vanilla data generator (<out>/reports/registries.json, produced with
 `java -cp <server jar and libraries> net.minecraft.data.Main --reports --output <out>`), which then lists every item.
@@ -20,6 +24,8 @@ def main():
     parser.add_argument("--repeat", type=int, default=1, help="write each recipe this many times under different names")
     parser.add_argument("--only", default="", help="comma-separated item ids (minecraft:...) or a file with one per line: "
                         "write recipes for these items only")
+    parser.add_argument("--lists", action="store_true", help="every slot takes the whole --only list as a direct item list "
+                        "(an ItemSlotDisplay and an Ingredient entry per item) instead of the one item of its recipe")
     args = parser.parse_args()
 
     entries = None
@@ -51,7 +57,7 @@ def main():
                 "type": "minecraft:crafting_shaped",
                 "category": "misc",
                 "pattern": ["AAA", "AAA", "AAA"],
-                "key": {"A": item},
+                "key": {"A": items if args.lists else item},
                 "result": {"id": item, "count": 1},
             }
             with open(os.path.join(recipe_dir, f"i{rep}_{k:05d}.json"), "w") as f:

@@ -147,7 +147,7 @@ def main():
             # a book is handled in one frame when it arrived in one bundle; loose packets may take several
             "distinctFrames": len({h["frame"] for h in r["handle"] if "frame" in h}),
             "distinctTicks": len({h["tick"] for h in r["handle"] if "tick" in h}),
-            "tickSpan": (max(h["tick"] for h in r["handle"]) - min(h["tick"] for h in r["handle"]) + 1) if r["handle"] else 0,
+            "tickSpan": (lambda ticks: max(ticks) - min(ticks) + 1 if ticks else 0)([h["tick"] for h in r["handle"] if "tick" in h]),
         }
         out["runs"].append(row)
         print(f"{i:>3}  {s['joinNo']:>4}  {s['knownRecipes']:>5}  {s['highlighted']:>5}  {s['runPackets']:>4}  {s['runEntries']:>7}  "

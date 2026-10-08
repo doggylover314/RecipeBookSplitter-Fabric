@@ -18,6 +18,10 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>All sizes are of what {@code PacketEncoder} writes (packet id plus payload), before ViaVersion translation.
  *
+ * <p>The handlers are recognised by class and name, not by what they do: a mod that patches the limits inside the
+ * vanilla handler classes cannot be seen that way. {@link #compressionLimitMayBeLifted} covers the one such mod known
+ * to lift the 8,388,608-byte limit (Packet Fixer).
+ *
  * @param mode how the pipeline frames packets
  * @param compressionThreshold the {@code CompressionEncoder} threshold, or -1 if there is none
  */
@@ -32,6 +36,17 @@ public record ConnectionLimits(Mode mode, int compressionThreshold) {
      * wrapper, far below the 97,151 bytes of room left. Checked by {@code ConnectionLimitsTest}.
      */
     static final int ALWAYS_FITS_COMPRESSED_BYTES = 2_000_000;
+    /** The Fabric mod id of Packet Fixer, which raises the limit of {@code CompressionEncoder} inside the vanilla class. */
+    public static final String PACKET_FIXER_MOD_ID = "packetfixer";
+
+    /**
+     * True if a mod is loaded that may lift {@link #COMPRESSION_LIMIT_BYTES} inside the vanilla {@code CompressionEncoder}
+     * (set at startup, see {@link #PACKET_FIXER_MOD_ID}). A packet over that size is then no longer certainly
+     * undeliverable for its size alone: only the frame limit decides, and whether the encoder sends it is unknown (the
+     * mod can be configured not to). The frame limit is not affected: the receiving frame decoder keeps its 3-byte
+     * length (checked with Packet Fixer 3.3.5 at the level of the handler classes, no real client).
+     */
+    public static volatile boolean compressionLimitMayBeLifted;
 
     public enum Mode {
         /** No {@code compress} handler, vanilla {@code Varint21LengthFieldPrepender}: the frame limit applies to the raw packet. */
@@ -68,7 +83,7 @@ public record ConnectionLimits(Mode mode, int compressionThreshold) {
     /**
      * @param sendable true if the pipeline can send it, false if it certainly throws, null if this cannot be known
      * @param frameBytes the frame body size (after compression) if it was computed, else -1
-     * @param reason why it cannot be sent, for the log; null if it can
+     * @param reason why it cannot be sent, or why that is unknown, for the log; null if it can be sent
      */
     public record Verdict(@Nullable Boolean sendable, long frameBytes, @Nullable String reason) {
         static final Verdict UNKNOWN = new Verdict(null, -1, null);
@@ -92,7 +107,8 @@ public record ConnectionLimits(Mode mode, int compressionThreshold) {
                         : new Verdict(false, packetBytes, "network compression is off, and a frame can hold at most 2,097,151 bytes");
             }
             case COMPRESSED -> {
-                if (packetBytes > COMPRESSION_LIMIT_BYTES) {
+                boolean overCompressionLimit = packetBytes > COMPRESSION_LIMIT_BYTES;
+                if (overCompressionLimit && !compressionLimitMayBeLifted) {
                     return new Verdict(false, -1, "network compression refuses packets over 8,388,608 bytes");
                 }
                 if (packetBytes < compressionThreshold) {
@@ -111,9 +127,12 @@ public record ConnectionLimits(Mode mode, int compressionThreshold) {
                         throw new IllegalStateException("encoded " + bytes.readableBytes() + " bytes, measured " + packetBytes);
                     }
                     long frame = VarInt.getByteSize(bytes.readableBytes()) + deflatedSize(bytes);
-                    return frame <= FRAME_LIMIT_BYTES
-                            ? new Verdict(true, frame, null)
-                            : new Verdict(false, frame, "it compresses to a " + Sizes.bytes(frame) + "-byte frame, and a frame can hold at most 2,097,151 bytes");
+                    if (frame > FRAME_LIMIT_BYTES) {
+                        return new Verdict(false, frame, "it compresses to a " + Sizes.bytes(frame) + "-byte frame, and a frame can hold at most 2,097,151 bytes");
+                    }
+                    return overCompressionLimit
+                            ? new Verdict(null, frame, "it is over 8,388,608 bytes, which network compression refuses unless a mod such as Packet Fixer lifts that limit, so whether this connection can send it is unknown")
+                            : new Verdict(true, frame, null);
                 } finally {
                     bytes.release();
                 }

@@ -39,9 +39,13 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
     /**
      * A frame holds at most 2,097,151 bytes as sent: the raw packet when network compression is off, the compressed
      * packet when it is on, and the raw packet again behind a proxy that forwards it uncompressed (Velocity with
-     * {@code compression-threshold = -1}). ViaVersion translates after the mod has measured, and grew one chunk by
-     * 25.4 % (1,999,931 to 2,507,176 bytes, for a 26.2 client, which disconnected with compression off). Even with that
-     * growth a 1,500,000-byte chunk (1.88 MB) stays below the limit.
+     * {@code compression-threshold = -1}). ViaVersion translates after the mod has measured and can make a chunk
+     * bigger. Measured with a 26.2 client through ViaFabric and compression off: a book of single-item slots grew one
+     * chunk by 25.4 % (1,999,931 to 2,507,176 bytes, which disconnected the client), and a book whose slots are direct
+     * lists of the 27 items whose id passes 127 grew chunks by 61 to 63 % (1,499,629 to 2,416,673 bytes at this
+     * ceiling, which disconnected the client; 1,048,524 to 1,706,228 at the default, which was delivered). These are
+     * measured examples, not a bound of the translation, and 1,500,000 x 1.627 is more than a frame holds. So this
+     * ceiling is for connections without such growth; with ViaVersion and no compression, keep the default.
      */
     public static final int MAX_MAX_CHUNK_BYTES = 1_500_000;
 
@@ -172,7 +176,7 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
             return MIN_MAX_CHUNK_BYTES;
         }
         if (integer.compareTo(BigInteger.valueOf(MAX_MAX_CHUNK_BYTES)) > 0) {
-            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to add up to 25%); using {}",
+            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent, and ViaVersion translation was measured to grow a chunk by up to 63%); using {}",
                     KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
             return MAX_MAX_CHUNK_BYTES;
         }

@@ -1,6 +1,7 @@
 package dev.recipebooksplitter;
 
 import dev.recipebooksplitter.config.SplitterConfig;
+import dev.recipebooksplitter.split.ConnectionLimits;
 import dev.recipebooksplitter.split.RecipeBookSendInterceptor;
 import dev.recipebooksplitter.util.Sizes;
 import java.nio.file.Path;
@@ -33,6 +34,10 @@ public class RecipeBookSplitter implements DedicatedServerModInitializer {
         LOGGER.info("[RecipeBookSplitter] loaded: maxChunkBytes={} ({}), logSplits={}, logOversizedPackets={}, undeliverableEntries={}, bundleChunks={}",
                 Sizes.bytes(loaded.maxChunkBytes()), Sizes.mib(loaded.maxChunkBytes()), loaded.logSplits(), loaded.logOversizedPackets(),
                 loaded.undeliverableEntries().json(), loaded.bundleChunks());
+        if (FabricLoader.getInstance().isModLoaded(ConnectionLimits.PACKET_FIXER_MOD_ID)) {
+            ConnectionLimits.compressionLimitMayBeLifted = true;
+            LOGGER.info("[RecipeBookSplitter] Packet Fixer is loaded: it can lift the 8,388,608-byte limit of network compression, so a recipe display entry over that size is not left out for its size alone (only if it compresses to a frame over 2,097,151 bytes)");
+        }
         RecipeBookSendInterceptor.logStartup();
     }
 }
