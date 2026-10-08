@@ -69,6 +69,32 @@ access for the first run. Set `E2E_STDIN` to an empty file where `/dev/null` is 
 - The server side (server template, Fabric API, Polymer, FabricProxy-Lite, Velocity, JRE 25) comes from the kit's
   `fetch.sh`, which pins them.
 
+## Status
+
+With the 1.0.0 jar (the investigation that preceded 1.1.0, with an earlier copy of this harness that had scenarios A to F;
+Xvfb with Mesa 25.2.8 llvmpipe, OpenGL 4.5, vanilla 1.21.11 client, offline mode; the logs are not in the repository):
+
+- A: the client was disconnected after the give and again when it rejoined (`Packet too big (is 9227553, should be less
+  than 8388608)`, rejoin `is 9227717`) and never held more than one recipe.
+- B, C, D, E: no disconnect, 4,458 recipes after the give and after each of three relogs, the same hash of the sorted id
+  list every time, the client's re-encoded entry bytes equal to the server's digest (about 40 comparisons), packet
+  counts equal to the chunk counts (9, or 145 and 143 at 65,536 bytes), `replace=true` only on the first packet. B and
+  C ran three times each (23 of 23 assertions), D 13 of 13, E 13 of 13.
+- F: `DecoderException: Failed to decode packet 'clientbound/minecraft:recipe_book_add'` caused by `NbtAccounterException:
+  Tried to read NBT tag that was too big; tried to allocate: 2043742 + 60000 bytes where max allowed: 2097152`, then a
+  disconnect. The 618 entries before the 4.5 MB one had been handled.
+- Cost of the handler on the render thread, medians of three runs on a loaded 4-CPU VM (spread 2 to 4 times): 9 chunks
+  84.5 ms for the first book of a run and 28.3 ms for later joins, 145 chunks 634.9 ms and 110.9 ms (143 chunks). Of the
+  145 background search-tree builds scheduled for the first book, 20 to 23 ran.
+
+With the 1.1.0 jar: `TBD(verify)`: A to K. What has not run at all yet is the frame and tick counter added to the harness
+(the `Minecraft.runTick` hook was only compiled and checked against the decompiled source), scenario J (`/reload`), the
+throttled scenarios H and I, and the single-frame assertions of G, I and K.
+
+Not covered: Polymer items and ViaFabric with this harness (the investigation drove real 26.1 and 26.2 clients through
+ViaFabric with a throwaway script, and did not inspect their recipe books), online mode, a GPU, sound, other operating
+systems than Linux.
+
 ## Notes
 
 - The mixins use the intermediary name `method_60361` for the synthetic lambda that builds the search tree. It is valid

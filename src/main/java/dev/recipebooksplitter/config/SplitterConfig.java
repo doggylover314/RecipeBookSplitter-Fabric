@@ -40,7 +40,7 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
      * A frame holds at most 2,097,151 bytes as sent: the raw packet when network compression is off, the compressed
      * packet when it is on, and the raw packet again behind a proxy that forwards it uncompressed (Velocity with
      * {@code compression-threshold = -1}). ViaVersion translates after the mod has measured, and grew one chunk by
-     * 25.3 % (1,999,931 to 2,507,176 bytes, for a 26.2 client, which disconnected with compression off). Even with that
+     * 25.4 % (1,999,931 to 2,507,176 bytes, for a 26.2 client, which disconnected with compression off). Even with that
      * growth a 1,500,000-byte chunk (1.88 MB) stays below the limit.
      */
     public static final int MAX_MAX_CHUNK_BYTES = 1_500_000;

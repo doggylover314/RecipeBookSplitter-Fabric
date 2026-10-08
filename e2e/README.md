@@ -169,7 +169,9 @@ growth by translation is printed per scenario.
 | VW1 | 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation (`growth-items-26.2.txt`), 26.2 client, compression off, 1,500,000 | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes |
 | VW2 | VW1 with the default budget | as VW1 |
 
-`VIAFABRIC_JAR` replaces the pinned jar. ViaFabric builds newer than 0.4.21+166 were not used here.
+`VIAFABRIC_JAR` replaces the pinned jar. ViaFabric 0.4.21+166 is the newest 1.21.11 build that starts: 0.4.21+168 and
+all later ones up to 0.4.22+184 crash at startup on Java 21 and 25 (`NoSuchMethodError ...J_L_Runtime$Version.feature`, an
+empty stub class inside the ViaFabric jar; see the main README).
 
 ### Latency (`KIND=perf`)
 
@@ -241,15 +243,30 @@ The checker prints one PASS/FAIL line per assertion. To re-check without re-runn
 
 ## Status
 
-The kit was reworked for 1.1.0: the scenarios E0-E7c are the ones of 1.0.0 (their results with the 1.0.0 jar are in the
-repository history); everything else is new. Smoke runs of the reworked kit against the 1.1.0 jar are recorded in the
-commit that introduced it; the full verification runs are done in the verification phase and recorded in the README.
+Which jar each result comes from. "1.0.0" is the investigation that preceded 1.1.0, run with earlier copies of the
+harnesses that are now in this kit (same scenario ids unless a row says otherwise; the logs are not in the repository).
+"Smoke" is one run of the 1.1.0 jar while this kit was built: JDK 21, Loader 0.19.5, Fabric API 0.141.6, Polymer 0.15.2,
+the protocol client, and no timing conclusions. `TBD(verify)` is what the verification phase fills in by running the kit
+in full; it replaces these cells with the command, the jar's SHA-256, Loader, Java and the result.
+
+| Scenarios | 1.0.0 jar | 1.1.0 jar |
+|---|---|---|
+| E0 to E7c | all passed. Baselines: E0 `Packet too big (is 9227553, should be less than 8388608)`, E0b `Packet too large: size 9227553 is over 8`. With the mod the 9,227,553-byte packet arrived as 9 packets of at most 1,048,576 bytes and their entry bytes hashed to the server's digest (E7b then expected the 65,536 minimum) | smoke: E0, E1, E1o, E6, E7d, E7e pass. `TBD(verify)`: the whole group on Java 21 / Loader 0.19.5, direct and behind Velocity |
+| E1 on other Loaders and Java versions | 26 of 26 assertions on Loader 0.19.0, 0.19.3 and 0.19.5, each on Java 21 and Java 25. Loader 0.18.6 refused the mod | `TBD(verify)`: E1, E1v, E2, E3b, E5, E6, E6b, E8, E8c and E9b on Java 25 / Loader 0.19.5, Java 21 / Loader 0.19.0 and Java 25 / Loader 0.19.0 (MixinExtras 0.5.3: `reused for N of N packets`) |
+| E8 to E9s | a prototype of the bundle and undeliverable-entry code (not the 1.0.0 jar) passed E8, E8b, E8x, E9, E9b and E9s | smoke: E8, E8c, E9b, E9s pass. `TBD(verify)`: the rest, E8d behind Velocity |
+| L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs | smoke: L2 passes. `TBD(verify)`: L1 to L6 |
+| P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3). A mutant of the mod that sizes with the bare codec failed P4, P5 and PR2 | smoke: PL1 passes. `TBD(verify)`: all of them, with P4v and PR2v (no mismatch) and PL2 |
+| VB0 to VW2 | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit uses 1,500,000 for V3 and V4). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | smoke: V1 passes. `TBD(verify)`: VB0 to VW2; VW1 must not disconnect |
+| X1 to X1c | not run as scenarios (the per-split times were measured with probe timers) | smoke: X1 once, 10 complete books, all pings answered; not evidence. `TBD(verify)`: X1 and X1b with the 1.0.0 and the 1.1.0 jar, three runs each, and X1c |
+| `realclient` A to F | A 3 of 3, B 23 of 23, C 23 of 23, D 13 of 13, E 13 of 13, F 2 of 2 assertions; B and C three times each | `TBD(verify)`: A to K |
 
 ## What this does not cover
 
 - The protocol client is a recorder, not Minecraft: it does not enforce the 2 MiB NBT quota or build a recipe book.
   What a real client does is covered by `realclient/` (not part of the scenario groups) and by reading its source.
-- No ViaBackwards, and no proxy other than Velocity 4.2.0 with FabricProxy-Lite.
+- The kit has no real 26.x client. The investigation ran real 26.1 and 26.2 clients through ViaFabric with a throwaway
+  script (joined, split book on give and relog, no disconnect), and did not inspect their recipe books.
+- No ViaBackwards (older clients), and no proxy other than Velocity 4.2.0 with FabricProxy-Lite.
 - Polymer items are covered for vanilla clients only: no Polymer client mod, no resource pack, and the protocol client's
   default language and client options (except PL1 and PL2, which announce `de_de`).
-- No modded client.
+- No modded client, no operating system other than Linux, and no Java other than 21 and 25.
