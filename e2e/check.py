@@ -8,7 +8,6 @@ scenario.json "kind" selects the assertions:
   split          the 9.2 MB book is split: digests against the client's packets, replace flags, budget (E1-E7, L*)
   bundlechunks   as split, with bundleChunks on: the chunks of each book arrive inside one bundle (E8c, E8d)
   baseline       no mod: the connection ends in "Packet too big/large"
-  limit          (check_via.py only, VW3x) the mod runs, and a translated chunk is still too big for a frame
   bundle         a recipe book packet inside a bundle is split in place (E8, E8b, E8e)
   undeliverable  entries the connection cannot send are left out, or sent anyway (E9, E9b, E9s)
   perf           Tester's repeated books while another connection is pinged (X*); no timing thresholds
@@ -40,6 +39,7 @@ BASELINE_ERROR_RE = re.compile(r"Tester lost connection:.*(Packet too big|Packet
 CLIENT_BASELINE_RE = re.compile(r"Packet too (big|large)")
 RBS_ERROR_RE = re.compile(r"/ERROR\]: \[RecipeBookSplitter\]")
 RBS_WARN_RE = re.compile(r"/WARN\]: \[RecipeBookSplitter\]")
+CLAMP_RE = re.compile(r"WARN\]: \[RecipeBookSplitter\] maxChunkBytes \S+ is (?:above the maximum|below the minimum)")
 ENCODE_OFF_RE = re.compile(r"\[RecipeBookSplitter\] encode once is off \(-Drecipebooksplitter\.encodeOnce=false\)")
 VERIFY_ON_RE = re.compile(r"\[RecipeBookSplitter\] verifyEncodeOnce is on")
 
@@ -256,6 +256,10 @@ def check_mod_log(report, scenario, lines):
         errors = [line for line in errors if "could not read config" not in line]
     if scenario["kind"] != "undeliverable":
         report.check(not errors, f"no ERROR from the mod {errors[:2]}")
+    if scenario["config_check"] not in ("clamp", "clamp-max", "upgrade"):
+        # the default budget is the ceiling: it is taken as written, not clamped
+        clamps = [line for line in lines if CLAMP_RE.search(line)]
+        report.check(not clamps, f"the mod clamped no maxChunkBytes value {clamps[:1]}")
     text = "\n".join(lines)
     encode_once = scenario.get("encode_once", "any")
     if encode_once != "any":
@@ -475,9 +479,12 @@ def run_config_checks(report, scenario, all_lines, config_path):
     loaded = next((m[1] for line in all_lines if (m := LOADED_RE.search(line))), "")
     unchanged = lambda: report.check(on_disk == initial_path.read_text(), "the config file was left as written")
     below = "(every chunk makes the client rebuild its recipe book)"
-    above = "(a frame holds at most 2,097,151 bytes as sent)"
-    # what follows "using 1500000": the advice for ViaVersion without compression, where the ceiling is not safe
-    advice = ". With ViaVersion and network compression off, keep the default 1048576: translation was measured to grow a chunk by up to 63%, which 1500000 bytes cannot absorb"
+    # the clamp WARN for a value above the ceiling (the ceiling equals the default: the config can only lower the budget)
+    explanation = (". A frame holds at most 2,097,151 bytes as sent, and ViaVersion can make a chunk bigger after the mod has measured it "
+                   "(by 25% and 63% in the two worst cases measured); a budget of 1048576 bytes still fits a growth of up to 99%, "
+                   "and bigger chunks would save the client only a few rebuilds")
+    above = lambda value: f"WARN]: [RecipeBookSplitter] maxChunkBytes {value} is above the maximum 1048576; using 1048576{explanation}"
+    ceiling_loaded = "maxChunkBytes=1,048,576 (1.0 MiB)"
     if check == "created":
         report.check("[RecipeBookSplitter] created default config" in text, "default config file was created (log line)")
         report.check(on_disk == DEFAULT_CONFIG, "the created file has the documented default content")
@@ -489,18 +496,16 @@ def run_config_checks(report, scenario, all_lines, config_path):
         unchanged()
         report.check(loaded.startswith("maxChunkBytes=262,144 (0.3 MiB)"), f"loaded line shows 262,144 ({loaded})")
     elif check == "clamp-max":
-        report.check(f"WARN]: [RecipeBookSplitter] maxChunkBytes 4000000 is above the maximum 1500000 {above}; using 1500000{advice}" in text,
-                     "WARN about clamping maxChunkBytes 4000000 to 1500000")
+        report.check(above(4000000) in text, "WARN about clamping maxChunkBytes 4000000 to the ceiling 1048576")
         unchanged()
-        report.check(loaded.startswith("maxChunkBytes=1,500,000 (1.4 MiB)"), f"loaded line shows 1,500,000 ({loaded})")
+        report.check(loaded.startswith(ceiling_loaded), f"loaded line shows 1,048,576 ({loaded})")
     elif check == "upgrade":
-        report.check(f"WARN]: [RecipeBookSplitter] maxChunkBytes 2000000 is above the maximum 1500000 {above}; using 1500000{advice}" in text,
-                     "WARN about clamping the 1.0.0 maximum 2000000 to 1500000")
+        report.check(above(2000000) in text, "WARN about clamping the 1.0.0 maximum 2000000 to the ceiling 1048576")
         for key, default in (("undeliverableEntries", "drop"), ("bundleChunks", "false")):
             report.check(f"INFO]: [RecipeBookSplitter] '{key}' missing, using default {default}" in text, f"INFO that '{key}' is missing from the 1.0.0 file")
         unchanged()
-        report.check(loaded == "maxChunkBytes=1,500,000 (1.4 MiB), logSplits=true, logOversizedPackets=false, undeliverableEntries=drop, bundleChunks=false",
-                     f"loaded line shows 1,500,000 and the defaults of the new keys ({loaded})")
+        report.check(loaded == "maxChunkBytes=1,048,576 (1.0 MiB), logSplits=true, logOversizedPackets=false, undeliverableEntries=drop, bundleChunks=false",
+                     f"loaded line shows 1,048,576 and the defaults of the new keys ({loaded})")
     elif check == "invalid":
         report.check("WARN]: [RecipeBookSplitter] 'undeliverableEntries' must be \"drop\" or \"send\", got \"SEND\"; using default \"drop\"" in text,
                      "WARN about the invalid undeliverableEntries")

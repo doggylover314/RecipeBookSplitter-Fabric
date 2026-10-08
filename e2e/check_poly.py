@@ -279,7 +279,7 @@ def main():
     sizes_bare = [r[2] for r in files[1]["rows"]]
     sizes_ctx = [r[3] for r in files[1]["rows"]]
     naive = {}
-    for budget in sorted({max_chunk, 262144, 1048576, 1500000}):
+    for budget in sorted({max_chunk, 262144, 1048576}):
         chunks = plan(sizes_bare, fixed, budget)
         true_sizes = [chunk_bytes(sizes_ctx, fixed, c) for c in chunks]
         single = [c for c in chunks if c[1] - c[0] == 1]

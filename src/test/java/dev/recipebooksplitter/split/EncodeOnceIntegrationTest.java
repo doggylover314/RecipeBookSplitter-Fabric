@@ -44,7 +44,8 @@ import org.junit.jupiter.api.Test;
  */
 class EncodeOnceIntegrationTest {
     private static final int SPLIT_BUDGET = 262_144;
-    private static final int UNSPLIT_BUDGET = 1_500_000;
+    /** The largest budget the config accepts, 1 MiB; the books that are meant to stay unsplit are smaller than this. */
+    private static final int UNSPLIT_BUDGET = SplitterConfig.MAX_MAX_CHUNK_BYTES;
 
     @BeforeAll
     static void bootstrap() {
@@ -126,7 +127,7 @@ class EncodeOnceIntegrationTest {
 
     @Test
     void wireBytesIdenticalWithAndWithoutReuse() throws Exception {
-        List<Entry> entries = RecipeFixtures.entries(400);
+        List<Entry> entries = RecipeFixtures.entries(250);
         for (boolean replace : new boolean[] {true, false}) {
             for (int budget : new int[] {SPLIT_BUDGET, UNSPLIT_BUDGET}) {
                 for (int compression : new int[] {-1, 256}) {

@@ -20,7 +20,9 @@ import org.slf4j.Logger;
 
 /**
  * @param maxChunkBytes upper bound for the encoded size of one recipe book packet (packet id plus payload,
- *                      before compression)
+ *                      before compression and before any ViaVersion translation); from
+ *                      {@link #MIN_MAX_CHUNK_BYTES} to {@link #MAX_MAX_CHUNK_BYTES}, and the config can only lower
+ *                      it from the default
  * @param logSplits log an INFO line whenever a packet had to be split
  * @param logOversizedPackets log a WARN line for every encoded clientbound packet over 4 MiB
  * @param undeliverableEntries what to do with a recipe display entry that this connection cannot send even in a
@@ -37,17 +39,20 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
      */
     public static final int MIN_MAX_CHUNK_BYTES = 262_144;
     /**
-     * A frame holds at most 2,097,151 bytes as sent: the raw packet when network compression is off, the compressed
-     * packet when it is on, and the raw packet again behind a proxy that forwards it uncompressed (Velocity with
-     * {@code compression-threshold = -1}). ViaVersion translates after the mod has measured and can make a chunk
-     * bigger. Measured with a 26.2 client through ViaFabric and compression off: a book of single-item slots grew one
-     * chunk by 25.4 % (1,999,931 to 2,507,176 bytes, which disconnected the client), and a book whose slots are direct
-     * lists of the 27 items whose id passes 127 grew chunks by 61 to 63 % (1,499,629 to 2,416,673 bytes at this
-     * ceiling, which disconnected the client; 1,048,524 to 1,706,228 at the default, which was delivered). These are
-     * measured examples, not a bound of the translation, and 1,500,000 x 1.627 is more than a frame holds. So this
-     * ceiling is for connections without such growth; with ViaVersion and no compression, keep the default.
+     * The largest budget the config accepts. It equals the default, so the config can only lower the budget.
+     * <p>
+     * A frame holds at most 2,097,151 bytes, and that limit applies to the packet as it is sent: the raw packet when
+     * network compression is off, the compressed packet when it is on, and the raw packet again behind a proxy that
+     * forwards it uncompressed (Velocity with {@code compression-threshold = -1}). ViaVersion translates after the mod
+     * has measured, so it can make a chunk bigger than the budget. Measured with a 26.2 client through ViaFabric and
+     * network compression off: a book of single-item slots grew one chunk by 25.4 % (1,999,931 to 2,507,176 bytes,
+     * which disconnected the client), and a book whose slots are direct lists of the 27 items whose id passes 127 grew
+     * chunks by 61 to 63 % (1,499,629 to 2,416,673 bytes, which disconnected the client; 1,048,524 to 1,706,228 bytes,
+     * which was delivered). These are measured examples, not a bound of the translation. A budget of 1,048,576 bytes
+     * still fits a growth of up to about 99 % (2,097,151 / 1,048,576), and a bigger budget would save a client only a
+     * few rebuilds of its recipe book, so there is no reason to go above it.
      */
-    public static final int MAX_MAX_CHUNK_BYTES = 1_500_000;
+    public static final int MAX_MAX_CHUNK_BYTES = DEFAULT_MAX_CHUNK_BYTES;
 
     public static final SplitterConfig DEFAULTS =
             new SplitterConfig(DEFAULT_MAX_CHUNK_BYTES, true, false, UndeliverableEntries.DROP, false);
@@ -176,8 +181,8 @@ public record SplitterConfig(int maxChunkBytes, boolean logSplits, boolean logOv
             return MIN_MAX_CHUNK_BYTES;
         }
         if (integer.compareTo(BigInteger.valueOf(MAX_MAX_CHUNK_BYTES)) > 0) {
-            log.warn("[RecipeBookSplitter] {} {} is above the maximum {} (a frame holds at most 2,097,151 bytes as sent); using {}. With ViaVersion and network compression off, keep the default {}: translation was measured to grow a chunk by up to 63%, which {} bytes cannot absorb",
-                    KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES, DEFAULT_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
+            log.warn("[RecipeBookSplitter] {} {} is above the maximum {}; using {}. A frame holds at most 2,097,151 bytes as sent, and ViaVersion can make a chunk bigger after the mod has measured it (by 25% and 63% in the two worst cases measured); a budget of {} bytes still fits a growth of up to 99%, and bigger chunks would save the client only a few rebuilds",
+                    KEY_MAX_CHUNK_BYTES, value, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES, MAX_MAX_CHUNK_BYTES);
             return MAX_MAX_CHUNK_BYTES;
         }
         return integer.intValueExact();

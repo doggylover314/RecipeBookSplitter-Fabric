@@ -100,10 +100,23 @@ class SplitterConfigTest {
         assertEquals(262_144, loadFile("{\"maxChunkBytes\": 65536}").maxChunkBytes(), "the 1.0.0 minimum");
         assertEquals(262_144, loadFile("{\"maxChunkBytes\": 262143}").maxChunkBytes());
         assertEquals(262_144, loadFile("{\"maxChunkBytes\": 262144}").maxChunkBytes());
-        assertEquals(1_500_000, loadFile("{\"maxChunkBytes\": 1500000}").maxChunkBytes());
-        assertEquals(1_500_000, loadFile("{\"maxChunkBytes\": 1500001}").maxChunkBytes());
-        assertEquals(1_500_000, loadFile("{\"maxChunkBytes\": 2000000}").maxChunkBytes(), "the 1.0.0 maximum");
-        assertEquals(1_500_000, loadFile("{\"maxChunkBytes\": 1e20}").maxChunkBytes());
+        assertEquals(1_048_575, loadFile("{\"maxChunkBytes\": 1048575}").maxChunkBytes());
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 1048576}").maxChunkBytes());
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 1048577}").maxChunkBytes());
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 1500000}").maxChunkBytes(), "the ceiling of the earlier 1.1.0 development builds");
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 2000000}").maxChunkBytes(), "the 1.0.0 maximum");
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 1e20}").maxChunkBytes());
+    }
+
+    /** The config can only lower the budget: the ceiling is the default, 1 MiB. */
+    @Test
+    void theCeilingIsTheDefault() {
+        assertEquals(1_048_576, SplitterConfig.MAX_MAX_CHUNK_BYTES);
+        assertEquals(SplitterConfig.DEFAULT_MAX_CHUNK_BYTES, SplitterConfig.MAX_MAX_CHUNK_BYTES);
+        assertEquals(262_144, SplitterConfig.MIN_MAX_CHUNK_BYTES);
+        assertEquals(SplitterConfig.MAX_MAX_CHUNK_BYTES, SplitterConfig.DEFAULTS.maxChunkBytes());
+        // A frame holds 2,097,151 bytes: the ceiling absorbs a growth by translation of up to about 99 %.
+        assertTrue(SplitterConfig.MAX_MAX_CHUNK_BYTES * 1.99 < 2_097_151);
     }
 
     @Test
@@ -116,17 +129,36 @@ class SplitterConfigTest {
 
             assertEquals(List.of(
                     "[RecipeBookSplitter] maxChunkBytes 65536 is below the minimum 262144 (every chunk makes the client rebuild its recipe book); using 262144",
-                    "[RecipeBookSplitter] maxChunkBytes 2000000 is above the maximum 1500000 (a frame holds at most 2,097,151 bytes as sent); using 1500000. With ViaVersion and network compression off, keep the default 1048576: translation was measured to grow a chunk by up to 63%, which 1500000 bytes cannot absorb"),
+                    "[RecipeBookSplitter] maxChunkBytes 2000000 is above the maximum 1048576; using 1048576. A frame holds at most 2,097,151 bytes as sent, and ViaVersion can make a chunk bigger after the mod has measured it (by 25% and 63% in the two worst cases measured); a budget of 1048576 bytes still fits a growth of up to 99%, and bigger chunks would save the client only a few rebuilds"),
                     log.messages(Level.WARN));
             assertEquals(2, log.entries().size());
+        }
+    }
+
+    /** The ceiling itself and everything below it is taken as written, without a WARN. */
+    @Test
+    void valuesUpToTheCeilingAreNotWarnedAbout() {
+        try (LogCapture log = new LogCapture("RecipeBookSplitter")) {
+            for (int value : new int[] {262_144, 262_145, 500_000, 1_048_575, 1_048_576}) {
+                assertEquals(value, SplitterConfig.parse("{\"maxChunkBytes\": " + value + ", \"logSplits\": true, \"logOversizedPackets\": false, \"undeliverableEntries\": \"drop\", \"bundleChunks\": false}",
+                        RecipeBookSplitter.LOGGER).maxChunkBytes());
+            }
+            assertEquals(List.of(), log.messages(Level.WARN));
+            assertEquals(0, log.entries().size());
+
+            assertEquals(1_048_576, SplitterConfig.parse("{\"maxChunkBytes\": 1048577, \"logSplits\": true, \"logOversizedPackets\": false, \"undeliverableEntries\": \"drop\", \"bundleChunks\": false}",
+                    RecipeBookSplitter.LOGGER).maxChunkBytes());
+            assertEquals(1, log.messages(Level.WARN).size());
+            assertTrue(log.messages(Level.WARN).get(0).startsWith("[RecipeBookSplitter] maxChunkBytes 1048577 is above the maximum 1048576; using 1048576."), log.messages(Level.WARN).toString());
         }
     }
 
     @Test
     void maxChunkBytesMustBeAWholeNumber() throws IOException {
         assertEquals(SplitterConfig.DEFAULT_MAX_CHUNK_BYTES, loadFile("{\"maxChunkBytes\": 1.5}").maxChunkBytes());
-        // An integral value written with an exponent is still a whole number.
-        assertEquals(1_500_000, loadFile("{\"maxChunkBytes\": 1.5e6}").maxChunkBytes());
+        // An integral value written with an exponent is still a whole number (and is clamped like any other).
+        assertEquals(1_048_576, loadFile("{\"maxChunkBytes\": 1.5e6}").maxChunkBytes());
+        assertEquals(500_000, loadFile("{\"maxChunkBytes\": 5e5}").maxChunkBytes());
         assertEquals(500_000, loadFile("{\"maxChunkBytes\": 500000.0}").maxChunkBytes());
     }
 
@@ -134,7 +166,7 @@ class SplitterConfigTest {
     void customValuesRoundTrip() {
         for (SplitterConfig config : new SplitterConfig[] {
                 new SplitterConfig(262_144, false, true, UndeliverableEntries.SEND, true),
-                new SplitterConfig(1_500_000, true, true, UndeliverableEntries.DROP, false),
+                new SplitterConfig(SplitterConfig.MAX_MAX_CHUNK_BYTES, true, true, UndeliverableEntries.DROP, false),
                 new SplitterConfig(123_456 + 262_144, false, false, UndeliverableEntries.SEND, false)}) {
             assertEquals(config, SplitterConfig.parse(config.toJson(), LOG));
         }
@@ -222,7 +254,9 @@ class SplitterConfigTest {
     @Test
     void constructorRejectsOutOfRangeValues() {
         assertThrows(IllegalArgumentException.class, () -> TestConfigs.budget(262_143));
-        assertThrows(IllegalArgumentException.class, () -> TestConfigs.budget(1_500_001));
+        assertThrows(IllegalArgumentException.class, () -> TestConfigs.budget(1_048_577));
+        assertThrows(IllegalArgumentException.class, () -> TestConfigs.budget(1_500_000));
+        assertEquals(1_048_576, TestConfigs.budget(1_048_576).maxChunkBytes());
         assertThrows(NullPointerException.class, () -> new SplitterConfig(262_144, true, false, null, false));
         assertTrue(TestConfigs.budget(262_144).logSplits());
     }

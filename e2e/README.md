@@ -83,7 +83,7 @@ lines; and, unless the row says otherwise, the split lines say that the measured
 | E7a | no config file, one phase | the default config file with the five keys is created; the loaded line shows the defaults |
 | E7b | `{"maxChunkBytes": 10}` | WARN that 10 is below the minimum 262144; the budget is 262,144 and respected; the file is not changed |
 | E7c | `{"maxChunkBytes": ` (malformed) | ERROR that the config cannot be read; defaults used; the file is not changed |
-| E7d | a 1.0.0 file with `maxChunkBytes` 2,000,000 and without the new keys | WARN that 2,000,000 is above the maximum 1500000 (with the advice to keep the default under ViaVersion without compression); an INFO for each missing new key; the file is not changed |
+| E7d | a 1.0.0 file with `maxChunkBytes` 2,000,000 and without the new keys | WARN that 2,000,000 is above the maximum 1048576, with the reasons (the frame limit applies to the packet as sent, ViaVersion growth of 25 % and 63 % measured, 1 MiB fits a growth of up to 99 %); the budget is 1,048,576; an INFO for each missing new key; the file is not changed |
 | E7e | `{"undeliverableEntries": "SEND", "bundleChunks": "yes"}` | a WARN for each; the loaded line shows `drop` and `false`; the file is not changed |
 
 ### Bundles and entries a connection cannot send (the test mod, `e2e/testmod`)
@@ -104,14 +104,20 @@ scenarios have no data pack.
 
 ### Limits
 
+`maxChunkBytes` can be 1,048,576 at most, which is also the default, so these scenarios run at the ceiling and cannot
+ask for more: a larger value is clamped (L6, E7d). The scenarios of earlier revisions that ran at 1,500,000 (L1, V3, V3b,
+V4, VW3x) can no longer be expressed without a patched jar; their evidence is in the main README.
+
 | ID | Setup | What is expected |
 |---|---|---|
-| L1 | `maxChunkBytes` 1,500,000 (the maximum), compression off | as E1; no frame over 2,097,151 bytes |
-| L2 | L1 behind Velocity, which sends raw frames to the client (`compression-threshold -1`) | as L1, seen by the client |
-| L3 | an incompressible payload (42 entries of about 244 KB), 1,500,000, compression 256 | as E1; no frame over 2,097,151 bytes |
+| L2 | E2 (the default budget, which is the ceiling, compression off) behind Velocity, which sends raw frames to the client (`compression-threshold -1`) | as E2, seen by the client: no frame over 2,097,151 bytes, no chunk over 1,048,576 |
+| L3 | an incompressible payload (42 entries of about 261 KB, four of which fill a chunk to within 0.5 % of 1,048,576), compression 256 | as E1; no frame over 2,097,151 bytes (a chunk of incompressible data makes a frame a few hundred bytes bigger than itself) |
 | L4 | L3 data, backend compression off, behind Velocity with `compression-threshold 256` | as E1 |
 | L5 | `maxChunkBytes` 262,144 (the minimum) | as E1; the chunk count is printed |
-| L6 | config `{"maxChunkBytes": 4000000}` | WARN that it is above the maximum 1500000 (same text as E7d); the budget is 1,500,000 |
+| L6 | config `{"maxChunkBytes": 4000000}` | WARN that it is above the maximum 1048576 (same text as E7d); the budget is 1,048,576 |
+
+All scenarios that do not test the clamp also assert that the mod logged no clamp WARN, so the default is taken as
+written.
 
 ### Polymer (`check_poly.py`, the test mod `e2e/polytest-mod`)
 
@@ -138,7 +144,7 @@ the same book: bare codec, codec in the player's context, what the mod measured,
 | P3 | as P2 plus 6 "fat" recipes (four large-tag ingredients each) | those entries are over the budget on their own: WARN for each, each sent alone; every other packet within the budget |
 | P4 | as P1, every second item player-bound (its client stack depends on the player) | bare bytes differ from in-context bytes; the mod's digest and the client's bytes equal the in-context ones |
 | P4v | P4 with `verifyEncodeOnce` | as P4; the measured bytes equal a normal encode (`N of N packets verified`, no ERROR) |
-| P5 | as P4, compression off, `maxChunkBytes` 1,500,000 | no frame over 2,097,151 bytes |
+| P5 | as P4, compression off (raw frames), at the ceiling 1,048,576 | no frame over 2,097,151 bytes; every packet within the budget |
 | P6 | as P1, phase 3 is a relog plus `/reload` | join and reload each send the full book in chunks |
 | P7 | as P1 with Polymer's own `split_recipe_book_packet_amount` set to 500, in front of this mod | Polymer's chunks of 500 entries pass through the mod, which splits the ones over the budget; every packet within the budget; the client gets every recipe once |
 | PV | the P1 pack with vanilla items (the "vanilla twin") | the size of the book without Polymer's rewriting, for comparison |
@@ -162,14 +168,16 @@ growth by translation is printed per scenario.
 | V1 | mod + ViaFabric + Polymer, compression 256, 26.1 client | as E1 for both clients; same chunk counts, entry counts and replace flags as the control |
 | V1b | V1 with a 26.2 client (two translation steps) | as V1 |
 | V2 | compression off | as V1 |
-| V3, V3b | compression off, `maxChunkBytes` 1,500,000, 26.1 / 26.2 client | as V1 |
-| V4 | compression 256, 1,500,000 | as V1 |
+| V2b | V2 with a 26.2 client | as V1 |
 | V5 | no Polymer | as V1 |
 | VC | V1 with `bundleChunks` | as V1; the chunks of each book arrive in one bundle, translated or not |
-| VW1 | 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation (`growth-items-26.2.txt`), 26.2 client, compression off, 1,500,000 | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes |
-| VW2 | VW1 with the default budget | as VW1 |
-| VW3 | 5,994 recipes whose every slot is a direct list of the same 27 items (`gen_items_datapack.py --lists`; about +63 % under translation), 26.2 client, compression off, default budget, phases `newer/give` and `newer/relog` | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes (1,706,228 in the review run) |
-| VW3x | VW3 with `maxChunkBytes` 1,500,000 (kind `limit`, not a baseline: the mod runs) | documents a limit: the client **is** disconnected with `Packet too large: size N` (a 1,499,629-byte chunk became 2,416,673 bytes in the review run). Per phase the checker requires the mod's split line (at least 2 chunks, none over 1,500,000 bytes), a digest line for the book, and a failing size N that is over 2,097,151, over the largest chunk and below the whole book, so that the failing packet is a translated chunk and not an unsplit book; and no `recipe_book_add` over the budget before the disconnect. It therefore fails without the mod, with a mod that splits nothing, and if the client stays connected (then the statement about this ceiling in the main README is stale) |
+| VW1 | 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation (`growth-items-26.2.txt`), 26.2 client, compression off, the ceiling 1,048,576 | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes; translation grew the book by at least 20 % (+25.3 % with 1.0.0 at 2,000,000, which disconnected the client) |
+| VW2 | VW1 with a 1.0.0 config file (`maxChunkBytes` 2,000,000, the 1.0.0 maximum) | the WARN of E7d and an INFO for each missing key; the budget is 1,048,576; as VW1 |
+| VW3 | 5,994 recipes whose every slot is a direct list of the same 27 items (`gen_items_datapack.py --lists`; about +63 % under translation), 26.2 client, compression off, the ceiling 1,048,576, with the 774 control clients of the other ViaFabric scenarios | the client is **not** disconnected; the largest translated frame is below 2,097,151 bytes (1,706,228 in the review run); translation grew the book by at least 20 % |
+
+The "at least 20 %" assertion of VW1 to VW3 keeps them worst cases: if a translation stopped growing these books, the
+scenarios would pass without testing the ceiling. The same books disconnected the 26.2 client at budgets of 2,000,000
+(VW1's book, 1.0.0) and 1,500,000 (VW3's book, review run); the kit can no longer run them there.
 
 `VIAFABRIC_JAR` replaces the pinned jar. ViaFabric 0.4.21+166 is the newest 1.21.11 build that starts: 0.4.21+168 and
 all later ones up to 0.4.22+184 crash at startup on Java 21 and 25 (`NoSuchMethodError ...J_L_Runtime$Version.feature`, an
@@ -260,17 +268,27 @@ harnesses that are now in this kit (same scenario ids unless a row says otherwis
 built from the main code of commit `0ad829b`, before the review fixes of `d49437f`: JDK 21, Loader 0.19.5, Fabric API
 0.141.6, Polymer 0.15.2, the protocol client, and no timing conclusions. Those fixes changed code that every scenario runs
 (the check on the codec call that decides whether measured bytes are reused, the clamp WARN text), so a smoke result is not
-a result of the current jar and checkers; the E7d cell says so where it matters. `TBD(verify)` is what the verification phase fills in by running the kit
-in full; it replaces these cells with the command, the jar's SHA-256, Loader, Java and the result.
+a result of the current jar and checkers; the E7d cell says so where it matters.
+
+"Ceiling smoke" is one run each of the scenarios named in the cells, made when the ceiling of `maxChunkBytes` was lowered
+from 1,500,000 to 1,048,576 (the default): jar SHA-256 `24a82085e4ad49bb3894b25624f854ae943610d368d152d4883a153d6cfc249f`,
+`./gradlew build` on JDK 21 from the tree of that change; server on Java 21.0.11, Fabric Loader 0.19.5, Fabric API 0.141.6,
+Polymer 0.15.2 (loaded in all of them), ViaFabric 0.4.21+166 for V2b and the VW scenarios (SHA-256
+`aa0e19d929913cbb276e7732fed06997d777e2a129580dded7443f2fb0f0327f`, downloaded by `fetch.sh` from its pinned URL),
+Velocity 4.2.0 for L2 and L4, the protocol client, ports 25791/25792, no timing conclusions. These runs say that the
+changed scenarios and checkers work against the changed jar; they are not the verification phase.
+
+`TBD(verify)` is what the verification phase fills in by running the kit in full; it replaces these cells with the
+command, the jar's SHA-256, Loader, Java and the result.
 
 | Scenarios | 1.0.0 jar | 1.1.0 |
 |---|---|---|
-| E0 to E7c | all passed. Baselines: E0 `Packet too big (is 9227553, should be less than 8388608)`, E0b `Packet too large: size 9227553 is over 8`. With the mod the 9,227,553-byte packet arrived as 9 packets of at most 1,048,576 bytes and their entry bytes hashed to the server's digest (E7b then expected the 65,536 minimum) | smoke (before the review fixes): E0, E1, E1o, E6, E7e pass; E7d passed with the old clamp WARN text, which the current checker does not accept (the WARN now says to keep the default with ViaVersion and no compression), so it has not passed with a matching jar and checker. `TBD(verify)`: the whole group on Java 21 / Loader 0.19.5, direct and behind Velocity |
+| E0 to E7c | all passed. Baselines: E0 `Packet too big (is 9227553, should be less than 8388608)`, E0b `Packet too large: size 9227553 is over 8`. With the mod the 9,227,553-byte packet arrived as 9 packets of at most 1,048,576 bytes and their entry bytes hashed to the server's digest (E7b then expected the 65,536 minimum) | smoke (before the review fixes): E0, E1, E1o, E6, E7e pass; E7d passed with an earlier clamp WARN text (ceiling 1,500,000), which the current checker does not accept (the ceiling is 1,048,576 now and the WARN gives the reasons for it), so that result is not one of the current jar and checker. Ceiling smoke: E7a, E7b, E7d (the clamp WARN of the ceiling, 1,048,576, the budget respected) pass. `TBD(verify)`: the whole group on Java 21 / Loader 0.19.5, direct and behind Velocity |
 | E1 on other Loaders and Java versions | 26 of 26 assertions on Loader 0.19.0, 0.19.3 and 0.19.5, each on Java 21 and Java 25. Loader 0.18.6 refused the mod | `TBD(verify)`: E1, E1v, E2, E3b, E5, E6, E6b, E8, E8c and E9b on Java 25 / Loader 0.19.5, Java 21 / Loader 0.19.0 and Java 25 / Loader 0.19.0 (MixinExtras 0.5.3: `reused for N of N packets`) |
 | E8 to E9s | a prototype of the bundle and undeliverable-entry code (not the 1.0.0 jar) passed E8, E8b, E8x, E9, E9b and E9s | smoke (before the review fixes): E8, E8c, E9b, E9s pass. `TBD(verify)`: the rest, E8d behind Velocity |
-| L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs | smoke (before the review fixes): L2 passes. `TBD(verify)`: L1 to L6 |
-| P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3), with other parameters than the kit uses now: P2 and PR3 at `maxChunkBytes` 65,536 (the kit: 262,144, the new minimum), P3 with fat recipes of two large tags (the kit: four, `--fat-tags 4`) and P5 at 2,000,000 (the kit: 1,500,000, the new maximum). A mutant of the mod that sizes with the bare codec was run on P1, P4, P5 and PR2 (R2): P1 passed, P4, P5 and PR2 failed; PR3 was only computed | smoke (before the review fixes): PL1 passes. `TBD(verify)`: all of them with the kit's parameters, which have not been run before, with P4v and PR2v (no mismatch) and PL2 |
-| VB0 to VW3x | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit uses 1,500,000 for V3, V3b and V4). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | review: the direct-list book of VW3 and VW3x was run in a scratch copy of the kit (ViaFabric 0.4.21+166, Java 25, Loader 0.19.5): at the default budget it was delivered (largest translated frame 1,706,228), at 1,500,000 the client was disconnected; the kit's VW3 and VW3x checkers pass on that output. Smoke (before the review fixes): V1 passes. `TBD(verify)`: VB0 to VW3x; VW1 and VW3 must not disconnect, VW3x must |
+| L1 to L6 | the bounds were measured on a real server with the ceiling at 2,000,000 and with a raised ceiling (frame limits to the byte, incompressible chunks, Velocity with `compression-threshold -1`); the L scenarios are adapted from those runs, and L1 (1,500,000, compression off) is E2 now | smoke (before the review fixes): L2 passed at 1,500,000, a budget that is no longer accepted, so it says nothing about the current L2. Ceiling smoke: L2, L3, L4 and L6 pass. L2: largest packet 1,048,544 bytes (frames of the same size, raw). L3: the 42 entries of 261 KB made chunks of four entries, 1,044,191 to 1,044,199 bytes on the give (99.6 % of the ceiling, frames 329 bytes bigger than the data), and 1,048,573 bytes at most on the relog, whose entries come in another order. L4: largest 1,044,199 bytes (frame 1,044,298) on the give and 1,048,537 on the relog. `TBD(verify)`: L2 to L6 in the full run; L5 was not run in the ceiling smoke |
+| P0 to P7, PV, PR1 to PR3 | 13 scenarios passed (the kit's PV and PR1 to PR3 were called V1 and R1 to R3), with other parameters than the kit uses now: P2 and PR3 at `maxChunkBytes` 65,536 (the kit: 262,144, the new minimum), P3 with fat recipes of two large tags (the kit: four, `--fat-tags 4`) and P5 at 2,000,000 (the kit: 1,048,576, the ceiling). A mutant of the mod that sizes with the bare codec was run on P1, P4, P5 and PR2 (R2): P1 passed, P4, P5 and PR2 failed; PR3 was only computed | smoke (before the review fixes): PL1 passes. `TBD(verify)`: all of them with the kit's parameters, which have not been run before, with P4v and PR2v (no mismatch) and PL2 |
+| VB0 to VW3 | V1, V1b, V2, V3, V3b, V4 and V5 passed on Java 25 (V1 also on Java 21), with budgets of 1,048,576 and 2,000,000 (the kit had V3, V3b and V4 at 1,500,000 instead; they are not in the kit any more, and V2b, the 26.2 client with compression off at the default, is new). The worst case, VW1 at 2,000,000, disconnected the 26.2 client (a 1,999,931-byte chunk became 2,507,176 bytes) | review: the direct-list book of VW3 and of the retired VW3x was run in a scratch copy of the kit (ViaFabric 0.4.21+166, Java 25, Loader 0.19.5): at the default budget, now the ceiling, it was delivered (largest translated frame 1,706,228), at 1,500,000, a budget that is no longer accepted, the client was disconnected; the kit's VW3 checker passes on the first of those outputs. Smoke (before the review fixes): V1 passes. Ceiling smoke: VW1, VW2, VW3 and V2b pass. VW1: the book grew +25.3 % (5,597,058 against 4,468,135 bytes), largest translated chunk 1,318,277 bytes (give) and 1,313,837 (relog), the client stayed connected; VW2 (the 1.0.0 file with 2,000,000, clamped with the WARN): the same sizes, 1,318,277 and 1,313,545. VW3: +61.7 % (7,652,212 against 4,732,811 bytes), largest translated chunk 1,706,228 bytes (give) and 1,696,233 (relog), the client stayed connected. V2b: +323 bytes (9,228,072 against 9,227,749), largest translated frame 1,048,569. `TBD(verify)`: VB0 to VW3 in the full run, with the release jar and on Java 25 |
 | X1 to X1c | not run as scenarios (the per-split times were measured with probe timers) | smoke (before the review fixes): X1 once, 10 complete books, all pings answered; not evidence. `TBD(verify)`: X1 and X1b with the 1.0.0 and the 1.1.0 jar, three runs each, and X1c |
 | `realclient` A to F | A 3 of 3, B 23 of 23, C 23 of 23, D 13 of 13, E 13 of 13, F 2 of 2 assertions; B and C three times each | `TBD(verify)`: A to K |
 

@@ -12,9 +12,9 @@ stay within the 8,388,608-byte uncompressed and 2,097,151-byte frame limits, hav
 as its control chunk, and the translation growth is printed. With bundleChunks (VC) the chunks of each book must arrive
 inside one bundle, translated or not.
 Baseline scenarios: the newer-protocol client must be disconnected with "Packet too big / too large" on the server.
-Limit scenarios (VW3x) document a ceiling that is too high for a translated book. They are not baselines: the mod runs
-and must have split the book as configured, and the client must be disconnected by a packet that is too large for a frame
-(2,097,151 bytes) although it is smaller than the whole book, so that the packet that failed is a translated chunk.
+The worst-case books (VW1 to VW3) are split scenarios like the others: the translated chunks of a book that grows by
+25 % or 63 % must stay below the 2,097,151-byte frame limit at the ceiling of maxChunkBytes (1,048,576). A scenario with a
+config file (VW2, a 1.0.0 file with a value above the ceiling) also gets the config assertions of check.py.
 Exit status 0 if every assertion holds. Writes <scenario>/via-summary.json.
 """
 import json
@@ -29,8 +29,6 @@ WORK = check.WORK
 FRAME_LIMIT = check.FRAME_LIMIT
 UNCOMPRESSED_LIMIT = check.UNCOMPRESSED_LIMIT
 BASELINE_ERROR_RE = re.compile(r"(Packet too big|Packet too large|unable to fit)")
-# The frame encoder's text: "Packet too large: size 2416673 is over 8" (the 8 is the VarInt length limit it prints).
-FRAME_ERROR_RE = re.compile(r"Packet too large: size (\d+)")
 NOISE_RE = re.compile(r"No key layers|SERVER IS RUNNING IN OFFLINE|The server will make no attempt|While this makes the game possible|To change this|There is a newer plugin version")
 
 
@@ -63,39 +61,6 @@ def check_baseline(r, specs, clients, server_phases, summary):
                                             or check.CLIENT_BASELINE_RE.search(c["disconnect"] or "") is not None),
                 f"phase {k + 1}: the connection ended in 'Packet too big/large': {reasons[:1]}")
         summary["phases"].append({"phase": k + 1, "spec": specs[k], "disconnect": c["disconnect"], "server_lost": reasons})
-
-
-def check_limit(r, scenario, specs, clients, server_phases, summary):
-    """VW3x: every phase must show a book the mod split within the budget, and a client that was disconnected by a packet
-    over the frame limit that is smaller than the whole book. Without the mod, or with a mod that splits nothing, the
-    unsplit book is the packet that fails and its size is the book's size, so this cannot pass on a baseline."""
-    budget = scenario["max_chunk_bytes"]
-    for k, (_, action, _) in enumerate(specs):
-        label = f"phase {k + 1} ({action}, client {scenario['newer_protocol']})"
-        client = clients[k]
-        if not r.check(client is not None and k < len(server_phases), f"{label}: produced a result and a server log phase"):
-            continue
-        server = server_phases[k]
-        splits = [x for x in server["splits"] if x["chunks"] >= 2]
-        r.check(bool(splits) and all(x["limit"] == budget and x["largest"] <= budget for x in splits),
-                f"{label}: the mod split the book into >= 2 chunks of at most {budget:,} bytes "
-                f"({[(x['chunks'], x['largest']) for x in splits]})")
-        books = [d for d in server["digests"] if d["entries"] > 1]
-        r.check(bool(books), f"{label}: a digest line for the book")
-        total = max((d["bytes"] for d in books), default=0)
-        largest = max((x["largest"] for x in splits), default=0)
-        reasons = [client["disconnect"] or ""] + server["lost"]
-        sizes = [int(m[1]) for text in reasons if (m := FRAME_ERROR_RE.search(text))]
-        failed = sizes[0] if sizes else 0
-        r.check(failed > 0, f"{label}: the client was disconnected by 'Packet too large: size N' ({client['disconnect']!r})")
-        if failed:
-            r.check(FRAME_LIMIT < failed < total and failed > largest,
-                    f"{label}: the failing packet of {failed:,} bytes is over the frame limit {FRAME_LIMIT:,}, grew from a chunk "
-                    f"(largest {largest:,}) and is smaller than the whole book ({total:,} bytes): a translated chunk")
-        over = [p["data"] for p in client["recipe_book_add"] if p["data"] > budget]
-        r.check(not over, f"{label}: no recipe_book_add over {budget:,} bytes arrived before the disconnect ({over[:2]})")
-        summary["phases"].append({"phase": k + 1, "spec": specs[k], "disconnect": client["disconnect"], "failing_packet_bytes": failed,
-                                  "book_bytes": total, "largest_chunk": largest})
 
 
 def check_one_phase(r, scenario, k, spec, client, server, newer):
@@ -195,9 +160,6 @@ def main():
         return finish(r, w, summary)
 
     check.check_mod_log(r, scenario, log_lines)
-    if scenario["kind"] == "limit":
-        check_limit(r, scenario, specs, clients, server_phases, summary)
-        return finish(r, w, summary)
     for k, spec in enumerate(specs):
         if not r.check(clients[k] is not None, f"phase {k + 1}: produced a result"):
             continue
@@ -206,6 +168,16 @@ def main():
         else:
             r.check(False, f"phase {k + 1}: the client logged in")
     compare_with_control(r, specs, clients, newer, summary)
+    if scenario["datapack"] == "items-worst":
+        # these books exist to be the worst case for translation growth: if a translation stopped growing them, VW1 to
+        # VW3 would pass without testing the ceiling (measured: +25.3 % for the book of VW1, +61 to 63 % for VW3)
+        for row in summary["growth"]:
+            translated, server_side = sum(row["translated_sizes"]), sum(row["server_sizes"])
+            r.check(server_side > 0 and translated >= 1.2 * server_side,
+                    f"phase {row['phase']}: translation grew the worst-case book by at least 20 % ({translated:,} vs {server_side:,} bytes, "
+                    f"{(translated / server_side - 1) * 100 if server_side else 0:+.1f} %)")
+    if scenario["config_check"] != "none":
+        check.run_config_checks(r, scenario, log_lines, w / "server" / "config" / "recipebooksplitter.json")
     for k, c in enumerate(clients):
         if c is not None:
             summary["phases"].append({"phase": k + 1, "spec": specs[k], "disconnect": c["disconnect"],

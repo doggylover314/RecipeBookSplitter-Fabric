@@ -17,9 +17,9 @@ E2E_PROG=run_e2e.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 e2e_defaults
 
-CORE_SCENARIOS=(E0 E0b E1 E1v E1o E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c E7d E7e E8 E8b E8x E8c E8d E8e E9 E9b E9s L1 L2 L3 L4 L5 L6)
+CORE_SCENARIOS=(E0 E0b E1 E1v E1o E2 E3 E3b E4 E5 E6 E6b E6x E7a E7b E7c E7d E7e E8 E8b E8x E8c E8d E8e E9 E9b E9s L2 L3 L4 L5 L6)
 POLYMER_SCENARIOS=(P0 P1 P1b P2 P3 P4 P4v P5 P6 P7 PV PR1 PR2 PR2v PR3 PL1 PL2)
-VIA_SCENARIOS=(VB0 VB0b V1 V1b V2 V3 V3b V4 V5 VC VW1 VW2 VW3 VW3x)
+VIA_SCENARIOS=(VB0 VB0b V1 V1b V2 V2b V5 VC VW1 VW2 VW3)
 PERF_SCENARIOS=(X1 X1b X1c)
 
 # Presets of the scenario groups.
@@ -46,7 +46,7 @@ define_scenario() {
   CFG=default; MAX_CHUNK=1048576; LOG_OVERSIZED=false; UNDELIVERABLE=drop; BUNDLE_CHUNKS=false
   DATAPACK=e2e; PACK_ARGS=(); JVM_ARGS=(); DIGEST=true; PROBE=0; POLYMER_SPLIT=0; NEWER_PROTOCOL=775
   PHASES=(give relog); CONFIG_CHECK=none; ENCODE_ONCE=reused; HUGE=0; POLYTEST_BOUND=0; VANILLA=0
-  local incompressible=(--mode incompressible --count 42 --pad 244000)
+  local incompressible=(--mode incompressible --count 42 --pad 261000)
   case $1 in
     E0)  DESC="baseline: no mod, compression 256"; KIND=baseline; RBS=0 ;;
     E0b) DESC="baseline: no mod, compression off"; KIND=baseline; RBS=0; COMP=-1 ;;
@@ -68,8 +68,8 @@ define_scenario() {
          PHASES=(give); CONFIG_CHECK=clamp ;;
     E7c) DESC="config smoke: malformed config, defaults used and file left alone"; CFG='{"maxChunkBytes": '
          PHASES=(give); CONFIG_CHECK=malformed ;;
-    E7d) DESC="config smoke: a 1.0.0 file (maxChunkBytes 2,000,000, no new keys) is clamped to 1,500,000 and left alone"
-         CFG='{"maxChunkBytes": 2000000, "logSplits": true, "logOversizedPackets": false}'; MAX_CHUNK=1500000
+    E7d) DESC="config smoke: a 1.0.0 file (maxChunkBytes 2,000,000, no new keys) is clamped to the ceiling 1,048,576 and left alone"
+         CFG='{"maxChunkBytes": 2000000, "logSplits": true, "logOversizedPackets": false}'; MAX_CHUNK=1048576
          PHASES=(give); CONFIG_CHECK=upgrade ;;
     E7e) DESC="config smoke: invalid undeliverableEntries and bundleChunks, defaults used"
          CFG='{"undeliverableEntries": "SEND", "bundleChunks": "yes"}'; PHASES=(give); CONFIG_CHECK=invalid ;;
@@ -93,16 +93,15 @@ define_scenario() {
          EXTRA_MODS=(testmod); DATAPACK=none; COMP=-1; UNDELIVERABLE=send
          PHASES=("cmd:rbstest huge Tester 3000000 false") ;;
 
-    L1)  DESC="maxChunkBytes 1,500,000 (the ceiling), compression off"; COMP=-1; MAX_CHUNK=1500000 ;;
-    L2)  DESC="L1 behind Velocity, which sends raw frames to the client (compression-threshold -1)"; COMP=-1; MAX_CHUNK=1500000
-         PROXY=1; VCOMP=-1 ;;
-    L3)  DESC="incompressible payload (42 entries of about 244 KB), maxChunkBytes 1,500,000, compression 256"
-         MAX_CHUNK=1500000; PACK_ARGS=("${incompressible[@]}") ;;
-    L4)  DESC="L3 data, backend compression off, behind Velocity with compression-threshold 256"; COMP=-1; MAX_CHUNK=1500000
+    L2)  DESC="E2 (compression off) behind Velocity, which sends raw frames to the client (compression-threshold -1): chunks at the ceiling"
+         COMP=-1; PROXY=1; VCOMP=-1 ;;
+    L3)  DESC="incompressible payload (42 entries of about 261 KB, four of them fill a chunk to within 0.5 % of the ceiling 1,048,576), compression 256"
+         PACK_ARGS=("${incompressible[@]}") ;;
+    L4)  DESC="L3 data, backend compression off, behind Velocity with compression-threshold 256"; COMP=-1
          PROXY=1; VCOMP=256; PACK_ARGS=("${incompressible[@]}") ;;
     L5)  DESC="maxChunkBytes 262,144 (the floor): many chunks"; MAX_CHUNK=262144 ;;
-    L6)  DESC="config smoke: maxChunkBytes 4,000,000 is clamped to 1,500,000"; CFG='{"maxChunkBytes": 4000000}'
-         MAX_CHUNK=1500000; PHASES=(give); CONFIG_CHECK=clamp-max ;;
+    L6)  DESC="config smoke: maxChunkBytes 4,000,000 is clamped to the ceiling 1,048,576"; CFG='{"maxChunkBytes": 4000000}'
+         MAX_CHUNK=1048576; PHASES=(give); CONFIG_CHECK=clamp-max ;;
 
     P0)  polymer_preset; DESC="baseline: Polymer items in recipes, no Recipe Book Splitter, compression 256"; KIND=baseline; RBS=0 ;;
     P1)  polymer_preset; DESC="mod + Polymer items in recipes, compression 256, 1 MiB budget" ;;
@@ -113,8 +112,8 @@ define_scenario() {
     P4)  polymer_preset; DESC="as P1 with player-bound items (the client-side stack depends on the player)"; POLYTEST_BOUND=2 ;;
     P4v) polymer_preset; DESC="as P4 with verifyEncodeOnce: the measured bytes of context-dependent encodings equal a normal encode"
          POLYTEST_BOUND=2; JVM_ARGS=(-Drecipebooksplitter.verifyEncodeOnce=true); ENCODE_ONCE=verified ;;
-    P5)  polymer_preset; DESC="as P4 with compression off and the largest allowed budget (1,500,000): a bare-codec size estimate would be too small"
-         COMP=-1; MAX_CHUNK=1500000; POLYTEST_BOUND=2 ;;
+    P5)  polymer_preset; DESC="as P4 with compression off (raw frames), at the ceiling 1,048,576: a bare-codec size estimate would be too small"
+         COMP=-1; POLYTEST_BOUND=2 ;;
     P6)  polymer_preset; DESC="as P1, but phase 3 is a relog followed by /reload while connected (the reload resends the recipe book)"
          PHASES=(give "cmd:polytest measure Tester" reload) ;;
     P7)  polymer_preset; DESC="as P1 with Polymer's own count-based splitter enabled (split_recipe_book_packet_amount 500) in front of this mod"
@@ -140,21 +139,16 @@ define_scenario() {
     V1)   via_preset; DESC="mod + ViaFabric + Polymer, compression 256, default budget, 26.1 client" ;;
     V1b)  via_preset; DESC="as V1 with a 26.2 client (two translation steps)"; NEWER_PROTOCOL=776 ;;
     V2)   via_preset; DESC="mod + ViaFabric + Polymer, compression off, default budget, 26.1 client"; COMP=-1 ;;
-    V3)   via_preset; DESC="mod + ViaFabric + Polymer, compression off, maxChunkBytes 1,500,000, 26.1 client"; COMP=-1; MAX_CHUNK=1500000 ;;
-    V3b)  via_preset; DESC="as V3 with a 26.2 client"; COMP=-1; MAX_CHUNK=1500000; NEWER_PROTOCOL=776 ;;
-    V4)   via_preset; DESC="mod + ViaFabric + Polymer, compression 256, maxChunkBytes 1,500,000, 26.1 client"; MAX_CHUNK=1500000 ;;
+    V2b)  via_preset; DESC="as V2 with a 26.2 client (two translation steps)"; COMP=-1; NEWER_PROTOCOL=776 ;;
     V5)   via_preset; DESC="mod + ViaFabric, no Polymer, compression 256, default budget, 26.1 client"; POLYMER_MOD=0 ;;
     VC)   via_preset; DESC="V1 with bundleChunks: the chunks of each book arrive in one bundle, translated by ViaVersion"; BUNDLE_CHUNKS=true ;;
-    VW1)  via_preset; DESC="worst case for translation growth: 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation; 26.2 client, compression off, maxChunkBytes 1,500,000: must not disconnect"
-          DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --repeat 2200); COMP=-1; MAX_CHUNK=1500000; NEWER_PROTOCOL=776 ;;
-    VW2)  via_preset; DESC="as VW1 with the default budget 1,048,576"
+    VW1)  via_preset; DESC="worst case for translation growth: 59,400 recipes of only the 27 items whose id grows by a VarInt byte in the 26.1 to 26.2 translation; 26.2 client, compression off, the ceiling 1,048,576: must not disconnect"
           DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --repeat 2200); COMP=-1; NEWER_PROTOCOL=776 ;;
-    VW3)  via_preset; DESC="worst case with direct item lists: 5,994 recipes whose every slot is a direct list of the 27 growth items (+63 % under translation); 26.2 client, compression off, default budget: must not disconnect"
-          DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; NEWER_PROTOCOL=776
-          PHASES=(newer/give newer/relog) ;;
-    VW3x) via_preset; DESC="VW3 at the ceiling 1,500,000: documents a limit, the 26.2 client IS disconnected (a 1.5 MB chunk becomes 2.4 MB, over the 2,097,151-byte frame)"
-          KIND=limit; DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; MAX_CHUNK=1500000
-          NEWER_PROTOCOL=776; PHASES=(newer/give newer/relog) ;;
+    VW2)  via_preset; DESC="VW1 with a 1.0.0 config file (maxChunkBytes 2,000,000, the 1.0.0 maximum, where 1.0.0 disconnected this client): clamped to 1,048,576, must not disconnect"
+          DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --repeat 2200); COMP=-1; NEWER_PROTOCOL=776; LOG_OVERSIZED=false
+          CFG='{"maxChunkBytes": 2000000, "logSplits": true, "logOversizedPackets": false}'; MAX_CHUNK=1048576; CONFIG_CHECK=upgrade ;;
+    VW3)  via_preset; DESC="worst case with direct item lists: 5,994 recipes whose every slot is a direct list of the 27 growth items (+63 % under translation); 26.2 client, compression off, the ceiling 1,048,576: must not disconnect"
+          DATAPACK=items-worst; PACK_ARGS=(--only "$E/growth-items-26.2.txt" --lists --repeat 222); COMP=-1; NEWER_PROTOCOL=776 ;;
 
     X1)  perf_preset; DESC="latency: ten take/give cycles of the whole book while another connection is pinged every 10 ms, one event-loop thread, compression 256" ;;
     X1b) perf_preset; DESC="as X1, compression off"; COMP=-1 ;;
