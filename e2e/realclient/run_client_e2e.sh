@@ -26,6 +26,12 @@
 #   CLIENT_TIMEOUT   seconds before the client is killed (default 420)
 #   THROTTLE_KBIT    server-to-client rate of H and I in kilobit/s (default 8000; the server drops a client that does not
 #                    answer a keep-alive within 15 s, so the book must arrive in well under that)
+#   RBS_DIGEST       1 (default): the client re-encodes every entry it received and hashes the bytes, to compare them with
+#                    the server's digest; 0: it does not (-Prbs.harness.digest=false) and the assertions about the digests
+#                    are skipped. The re-encoding runs on the client's render thread inside the frame that handles the
+#                    packets, so it adds several hundred ms to the frame that handles a whole book (a bundle). The frame
+#                    times in the output are only meaningful with RBS_DIGEST=0. (Gradle drops environment variables whose
+#                    names contain a dot, as ORG_GRADLE_PROJECT_rbs.harness.digest would, so the script passes -P itself.)
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -41,6 +47,8 @@ QUIET_MS=${QUIET_MS:-4000}
 CLIENT_TIMEOUT=${CLIENT_TIMEOUT:-420}
 THROTTLE_KBIT=${THROTTLE_KBIT:-8000}
 RELOGS_DEFAULT=${RELOGS:-1}
+RBS_DIGEST=${RBS_DIGEST:-1}
+case $RBS_DIGEST in 0|1) ;; *) die "RBS_DIGEST must be 0 or 1, not '$RBS_DIGEST'" ;; esac
 ALL=(A B C D E F G H I J K)
 
 define_scenario() {
@@ -109,10 +117,12 @@ start_client() {
   write_client_options
   mkdir -p "$W/client"
   CLIENT_MARK="-Drbs.harness.out=$W/client"
+  local digest_args=()
+  [ "$RBS_DIGEST" = 1 ] || digest_args+=(-Prbs.harness.digest=false)
   ( cd "$HERE" && LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=2 exec setsid "$REPO/gradlew" -p "$HERE" runClient --no-daemon -q \
       -Prbs.server="127.0.0.1:$CLIENT_PORT" -Prbs.xmx="$CLIENT_XMX" \
       -Prbs.harness.out="$W/client" -Prbs.harness.relogs="$RELOGS" -Prbs.harness.summaries="$SUMMARIES" \
-      -Prbs.harness.reconnectOnDisconnect="$RECONNECT" -Prbs.harness.quietMs="$QUIET_MS" \
+      -Prbs.harness.reconnectOnDisconnect="$RECONNECT" -Prbs.harness.quietMs="$QUIET_MS" ${digest_args[@]+"${digest_args[@]}"} \
       > "$W/client.log" 2>&1 < "$E2E_STDIN" ) &
   CLIENT_PID=$!
 }

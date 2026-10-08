@@ -11,6 +11,8 @@
     "ConnectionMixin",
     "MinecraftMixin",
     "PacketDecoderMixin",
+    "PacketProcessorMixin",
+    "RenderSystemMixin",
     "SessionSearchTreesMixin",
     "SessionSearchTreesTimingMixin"
   ],

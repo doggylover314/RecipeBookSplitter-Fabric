@@ -17,9 +17,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -46,9 +48,23 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Output: one JSON object per line in {@code <rbs.harness.out>/events.jsonl}; the same lines are logged with the
  * prefix {@code [RBSH]}. Event types: {@code init}, {@code join}, {@code decode}, {@code handle}, {@code summary},
- * {@code disconnect}, {@code reconnect}, {@code exit}. A {@code handle} event carries the number of client ticks and of
- * frames that had completed when the packet was handled ({@code tick}, {@code frame}): packets that arrive in one bundle
- * are all handled in one frame, loose ones may take several.
+ * {@code disconnect}, {@code reconnect}, {@code exit}, {@code keepalive} and {@code slowframe}. A {@code handle} event
+ * carries the number of client ticks and of frames that had completed when the packet was handled ({@code tick},
+ * {@code frame}): packets that arrive in one bundle are all handled in one frame, loose ones may take several.
+ *
+ * <p>Frame times. A frame's <em>work time</em> is the time in {@code Minecraft.runTick} minus the wait of the frame rate
+ * limiter ({@code RenderSystem.limitDisplayFPS}); with the 20 fps cap of the kit's {@code options.txt} an idle frame
+ * takes 50 ms in all and has a work time of a few ms. The {@code summary} event reports, for the frames since the
+ * previous summary: the slowest frame overall ({@code runMaxFrameWorkMs}), the slowest frame in the window from the
+ * first decode of the run's packets to one second after the last was handled ({@code bookMaxFrameWorkMs}, with its
+ * split into {@code packetsMs}, {@code tickMs} and {@code renderMs} in {@code bookMaxFrame}), the frames that handled
+ * the run's packets ({@code handleFrames}, {@code handleFramesMaxWorkMs}), how many frames took at least 50 and 100 ms,
+ * the number of background search builds that were scheduled ({@code searchUpdatesSinceLast}), and the keep-alive
+ * packets that arrived with the largest delay since the server sent them ({@code keepAlives},
+ * {@code keepAliveMaxDelayMs}; the id of a play-phase keep-alive is the server's {@code Util.getMillis()}, so the
+ * difference is a delay only when the server runs on the same host). The timers are passive: they only read the clock.
+ * With the digest on, the re-encoding for the SHA-256 runs on the render thread inside the frame of the packet and
+ * inflates these times (see {@code rbs.harness.digest}).
  *
  * <p>System properties (all optional):
  * <ul>
@@ -63,7 +79,9 @@ import org.slf4j.LoggerFactory;
  *       did not cause (default 0); after the last one, the next unexpected disconnect ends the client;</li>
  *   <li>{@code rbs.harness.reconnectDelayMs}: delay before a reconnect or before exiting after a disconnect (3000);</li>
  *   <li>{@code rbs.harness.maxRunMs}: safety limit, the client stops after this long (900000);</li>
- *   <li>{@code rbs.harness.digest}: set to {@code false} to skip re-encoding the received entries for the SHA-256.</li>
+ *   <li>{@code rbs.harness.digest}: set to {@code false} to skip re-encoding the received entries for the SHA-256. The
+ *       re-encoding runs on the render thread, inside the frame that handles the packet, so frame times are only
+ *       meaningful with it off ({@code RBS_DIGEST=0} in {@code run_client_e2e.sh}).</li>
  * </ul>
  */
 public final class Harness {
@@ -114,6 +132,20 @@ public final class Harness {
     private static boolean inGame;
     private static long ticks;
     private static long frames;
+    // Frame timing (passive, see addFrameStats): frame work time is the time in runTick minus the wait of the frame rate
+    // limiter, split into the packets that were handled, the ticks and the rest (rendering), plus keep-alive delays.
+    private static long frameStartNs;
+    private static long limiterStartNs;
+    private static long limiterNs;
+    private static long packetsStartNs;
+    private static long framePacketsNs;
+    private static long tickStartNs;
+    private static long frameTickNs;
+    private static int searchUpdates;
+    private static int prevSearchUpdates;
+    private static final TreeSet<Long> RUN_HANDLE_FRAMES = new TreeSet<>();
+    private static final ArrayList<long[]> FRAME_LOG = new ArrayList<>();
+    private static final ConcurrentLinkedQueue<long[]> KEEPALIVES = new ConcurrentLinkedQueue<>();
 
     // Run statistics (reset by each summary).
     private static int runPackets;
@@ -261,6 +293,7 @@ public final class Harness {
     }
 
     public static void onSearchUpdateStart() {
+        searchUpdates++;
         searchStartNs = System.nanoTime();
     }
 
@@ -312,6 +345,7 @@ public final class Harness {
         o.addProperty("notificationFlags", notification);
         o.addProperty("tick", ticks);
         o.addProperty("frame", frames);
+        RUN_HANDLE_FRAMES.add(frames);
         o.addProperty("handleMs", ms(handleNs));
         o.addProperty("refreshMs", ms(refreshNs));
         o.addProperty("loopMs", ms(handleNs - refreshNs));
@@ -340,7 +374,9 @@ public final class Harness {
         activity = true;
 
         if (DIGEST) {
-            // Outside of the timed region: re-encode every entry like the server's probe does and hash the bytes.
+            // Outside of the timed handle region, but still on the render thread and inside this frame: re-encode every
+            // entry like the server's probe does and hash the bytes. For a 9 MB book that is several hundred ms of
+            // frame time.
             try {
                 MessageDigest packetDigest = newSha256();
                 ByteBuf buf = Unpooled.buffer(4096);
@@ -412,6 +448,70 @@ public final class Harness {
     /** Render thread, at the start of every frame ({@code Minecraft.runTick}), before the queued packets are handled. */
     public static void onFrame() {
         frames++;
+        frameStartNs = System.nanoTime();
+        limiterNs = 0;
+        framePacketsNs = 0;
+        frameTickNs = 0;
+    }
+
+    /** Render thread, around {@code PacketProcessor.processQueuedPackets} (all packets queued for this frame). */
+    public static void onPacketsStart() {
+        packetsStartNs = System.nanoTime();
+    }
+
+    public static void onPacketsEnd() {
+        framePacketsNs += System.nanoTime() - packetsStartNs;
+    }
+
+    /** Render thread, around {@code Minecraft.tick} (a frame may run several ticks). */
+    public static void onTickStart() {
+        tickStartNs = System.nanoTime();
+    }
+
+    public static void onTickEnd() {
+        frameTickNs += System.nanoTime() - tickStartNs;
+    }
+
+    /** Render thread, at the end of every frame ({@code Minecraft.runTick}). */
+    public static void onFrameEnd() {
+        long end = System.nanoTime();
+        if (frameStartNs == 0) {
+            return;
+        }
+        long full = end - frameStartNs;
+        long work = full - limiterNs;
+        FRAME_LOG.add(new long[] {frameStartNs, end, work, frames, framePacketsNs, frameTickNs,
+                Minecraft.getInstance().getFrameTimeNs()});
+        if (work >= 100_000_000L) {
+            JsonObject o = new JsonObject();
+            o.addProperty("frame", frames);
+            o.addProperty("tick", ticks);
+            o.addProperty("workMs", ms(work));
+            o.addProperty("fullMs", ms(full));
+            event("slowframe", o);
+        }
+        frameStartNs = 0;
+    }
+
+    /** Render thread, around {@code RenderSystem.limitDisplayFPS} (the wait that keeps the frame rate at the cap). */
+    public static void onLimiterStart() {
+        limiterStartNs = System.nanoTime();
+    }
+
+    public static void onLimiterEnd() {
+        limiterNs += System.nanoTime() - limiterStartNs;
+    }
+
+    /** Netty thread: a keep-alive arrived. The id is the server's Util.getMillis() (System.nanoTime() / 10^6) at the time it
+     *  was sent; on one host System.nanoTime() is CLOCK_MONOTONIC, so the difference is the one-way delay. */
+    public static void onKeepAlive(long id) {
+        // play phase: System.nanoTime() / 10^6; configuration phase: epoch milliseconds
+        long delay = id > 100_000_000_000L ? System.currentTimeMillis() - id : System.nanoTime() / 1_000_000L - id;
+        KEEPALIVES.add(new long[] {System.nanoTime(), delay});
+        JsonObject o = new JsonObject();
+        o.addProperty("id", id);
+        o.addProperty("delayMs", delay);
+        event("keepalive", o);
     }
 
     public static void onTick(Minecraft mc) {
@@ -547,6 +647,7 @@ public final class Harness {
         o.addProperty("gcMsSinceLast", gc - prevGcMs);
         Runtime rt = Runtime.getRuntime();
         o.addProperty("heapUsedMb", (rt.totalMemory() - rt.freeMemory()) >> 20);
+        addFrameStats(o);
         event("summary", o);
 
         prevCpuNs = cpu;
@@ -555,6 +656,80 @@ public final class Harness {
         prevBgNs = bgNs;
         prevBgBuilds = bgBuilds;
         resetRun();
+    }
+
+    /** Frame statistics since the last summary, and for the frames that overlap the book's arrival window. */
+    private static void addFrameStats(JsonObject o) {
+        long winStart = runFirstDecodeNs;
+        long winEnd = runLastHandleEndNs + 1_000_000_000L;
+        int n = 0, over50 = 0, over100 = 0, bn = 0, b50 = 0, b100 = 0;
+        long max = 0, maxFull = 0, bmax = 0, bmaxFull = 0;
+        long[] bmaxFrame = null;
+        for (long[] f : FRAME_LOG) {
+            n++;
+            max = Math.max(max, f[2]);
+            maxFull = Math.max(maxFull, f[1] - f[0]);
+            if (f[2] >= 50_000_000L) over50++;
+            if (f[2] >= 100_000_000L) over100++;
+            if (runPackets > 0 && f[1] >= winStart && f[0] <= winEnd) {
+                bn++;
+                if (f[2] > bmax) {
+                    bmaxFrame = f;
+                }
+                bmax = Math.max(bmax, f[2]);
+                bmaxFull = Math.max(bmaxFull, f[1] - f[0]);
+                if (f[2] >= 50_000_000L) b50++;
+                if (f[2] >= 100_000_000L) b100++;
+            }
+        }
+        JsonArray hf = new JsonArray();
+        long hfMax = 0;
+        for (long[] f : FRAME_LOG) {
+            if (RUN_HANDLE_FRAMES.contains(f[3])) {
+                JsonObject x = new JsonObject();
+                x.addProperty("frame", f[3]);
+                x.addProperty("workMs", ms(f[2]));
+                x.addProperty("packetsMs", ms(f[4]));
+                x.addProperty("tickMs", ms(f[5]));
+                x.addProperty("renderMs", ms(f[6]));
+                hf.add(x);
+                hfMax = Math.max(hfMax, f[2]);
+            }
+        }
+        RUN_HANDLE_FRAMES.clear();
+        o.add("handleFrames", hf);
+        o.addProperty("handleFramesMaxWorkMs", ms(hfMax));
+        o.addProperty("searchUpdatesSinceLast", searchUpdates - prevSearchUpdates);
+        prevSearchUpdates = searchUpdates;
+        FRAME_LOG.clear();
+        o.addProperty("runFrames", n);
+        o.addProperty("runMaxFrameWorkMs", ms(max));
+        o.addProperty("runMaxFrameFullMs", ms(maxFull));
+        o.addProperty("runFramesOver50WorkMs", over50);
+        o.addProperty("runFramesOver100WorkMs", over100);
+        o.addProperty("bookFrames", bn);
+        o.addProperty("bookMaxFrameWorkMs", ms(bmax));
+        o.addProperty("bookMaxFrameFullMs", ms(bmaxFull));
+        if (bmaxFrame != null) {
+            JsonObject w = new JsonObject();
+            w.addProperty("frame", bmaxFrame[3]);
+            w.addProperty("workMs", ms(bmaxFrame[2]));
+            w.addProperty("packetsMs", ms(bmaxFrame[4]));
+            w.addProperty("tickMs", ms(bmaxFrame[5]));
+            w.addProperty("renderMs", ms(bmaxFrame[6]));
+            o.add("bookMaxFrame", w);
+        }
+        o.addProperty("bookFramesOver50WorkMs", b50);
+        o.addProperty("bookFramesOver100WorkMs", b100);
+        int kc = 0;
+        long kmax = Long.MIN_VALUE;
+        long[] k;
+        while ((k = KEEPALIVES.poll()) != null) {
+            kc++;
+            kmax = Math.max(kmax, k[1]);
+        }
+        o.addProperty("keepAlives", kc);
+        o.addProperty("keepAliveMaxDelayMs", kc == 0 ? -1 : kmax);
     }
 
     private static void relog() {

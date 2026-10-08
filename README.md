@@ -15,8 +15,11 @@ protocol client; details in [e2e/README.md](e2e/README.md#status)). Numbers name
 the tree of the first 1.1.0 commit (before bundles and undeliverable entries), which was never released. Numbers from
 the opt-in benchmark are named as such: it runs the mod's code in a unit-test pipeline, not a release jar. Numbers named
 "review" come from checks made while the 1.1.0 code was reviewed (scratch copies of the repository, the kit's scenarios
-or unit tests; not repeated with the release jar). `TBD(verify)` marks what has not been run with 1.1.0 yet; the list is
-under [Pending verification](#pending-verification).
+or unit tests; not repeated with the release jar). Numbers named "verification" come from the verification runs of 1.1.0
+with the jar of the ceiling smoke (SHA-256 `24a82085e4ad...`, the main code of commit `1b87fb7`), server on JDK 21.0.11
+with Fabric Loader 0.19.5, Fabric API 0.141.6 and Polymer 0.15.2, three runs per configuration unless a cell says
+otherwise, on a 4-CPU VM that another job shared (their logs are not in the repository). `TBD(verify)` marks what has not
+been run with 1.1.0 yet; the list is under [Pending verification](#pending-verification).
 
 ## What it does
 
@@ -35,8 +38,9 @@ A real, unmodified 1.21.11 client ended up with the same recipe book (tested wit
 `recipe give` and after each of three relogs, the same hash of the recipe id list every time, all 4,458 highlighted as
 the server had flagged them, and a hash of the entries it had received that equals the digest the server logged (about
 40 comparisons; directly, behind Velocity, with compression off and with 65,536-byte chunks). Without the mod the same
-client was disconnected after the give and again when it rejoined. With 1.1.0 this is `TBD(verify)`: real client
-scenarios B, C, D, E, G, J and K. Toasts were not observed. By the client code, a split gives one toast with the same
+client was disconnected after the give and again when it rejoined. With 1.1.0 the real client scenarios H, I and K ran
+and passed their assertions (see [bundleChunks](#bundlechunks)); `TBD(verify)`: B, C, D, E, G and J. Toasts were not
+observed. By the client code, a split gives one toast with the same
 items, unless chunks that carry notifications arrive more than about 5.6 seconds apart.
 
 One kind of entry cannot be helped by splitting: a single recipe display entry that the connection cannot carry even in
@@ -211,18 +215,46 @@ What the decision knows and does not know:
 ### bundleChunks
 
 Without it the chunks of a split are sent one after another. With `true` they are sent inside one
-`ClientboundBundlePacket`, which the client handles in a single call on its main thread. Every chunk still rebuilds the
-recipe book, but all of it happens in one frame (client code, and a headless model of the client): fewer background
-builds of the search index get to start (for 9 chunks 71 to 100 ms of background CPU when they arrive together, 283 ms
-when they arrive spread out), and no half-filled book is visible between two frames. On a fast link the chunks arrive
-together and the client drains all queued packets in a frame anyway, so the difference should show on slow links. It
-applies when the original packet was not already inside a bundle, the split makes 2 to 4,096 chunks (the most a client
-accepts in one bundle) and the connection has a bundle unpacker; otherwise the chunks go out loose, with a DEBUG line
-that says why.
+`ClientboundBundlePacket`, which the client handles in a single call on its main thread: the whole book is handled in
+one frame and one tick, and the recipe book is never half filled between two ticks. Every chunk still rebuilds the
+recipe book, and by the client code a build of the recipe search index that has not started when the next one is
+scheduled is cancelled, so fewer of them run. It applies when the original packet was not already inside a bundle, the
+split makes 2 to 4,096 chunks (the most a client accepts in one bundle) and the connection has a bundle unpacker;
+otherwise the chunks go out loose, with a DEBUG line that says why.
 
-The default is `false` because it has only been run with the protocol client and in unit tests (smoke E8c: 9 chunks in
-one bundle, no disconnect, digests matching; run before the review fixes). `TBD(verify)`: real client with and without a throttled link (G, H, I),
-behind Velocity (K) and through ViaFabric (VC). It becomes the default only if those show a benefit and no failure.
+What a real client showed (verification; vanilla 1.21.11 client on Xvfb with software rendering, capped at 20 fps; the
+9.2 MB book in 9 chunks at 1 MiB, compression 256; the client's entry digest off, because it runs inside the frame; the
+medians of three runs; "give" is `recipe give Tester *`, "relog" the initial book of a later join). H and I limit the
+server-to-client link to 8 or 20 Mbit/s, without and with `bundleChunks`; K is `bundleChunks` behind Velocity, with no
+loose twin:
+
+| Run | bundleChunks | Ticks from the first chunk to the last, give / relog | Search builds scheduled and run, give; relog | Slowest frame that handled book packets, give / relog | Background CPU of the builds, give / relog |
+|---|---|---|---|---|---|
+| H, 8 Mbit/s | off | 129 / 130 | 9 and 9; 10 and 10 | 95 / 124 ms | 631 / 506 ms |
+| I, 8 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 190 / 188 ms | 662 / 311 ms |
+| H, 20 Mbit/s | off | 54 / 55 | 9 and 9; 10 and 10 | 114 / 144 ms | 687 / 518 ms |
+| I, 20 Mbit/s | on | 0 / 0 | 9 and 4; 10 and 6 | 265 / 223 ms | 568 / 264 ms |
+| K, Velocity | on | 0 / 0 | 9 and 4; 10 and 6 | 263 / 232 ms | 533 / 355 ms |
+
+All 30 runs (15 with the client's digest off, as in the table, and 15 with it on) passed their assertions (the
+client's recipe book equals what the server sent, one packet per chunk, `replace` only on the first; with the digest on
+the entry hashes equal the server's) with no disconnect, and with the bundle the book was handled in one frame and one
+tick every time. So the benefit is real and small: instead of 54 to 131 ticks (2.7 to 6.5 s) with a part of the book,
+the book appears at once, and 4 or 6 builds run instead of 9 or 10, at about the same or less background CPU. The cost
+is that the frame that handles all the packets takes 1.5 to 2.3 times as long as the slowest frame with loose chunks
+(190 to 265 ms against 95 to 144 ms): a bundle puts the handlers of all 9 chunks into one frame, 72 ms of packet
+handling in the slowest frame of I at 8 Mbit/s (give) and 160 ms at 20 Mbit/s against 19 ms in the slowest frame of H
+at 8 Mbit/s, and the rest of such a frame is mostly rendering; loose chunks spread the handlers over 9 frames. The
+keep-alive margin did not change: the book needs the same time to arrive with and without the bundle (6.47 s at
+8 Mbit/s and 2.75 s at 20 Mbit/s, which leaves 8.5 s and 12.2 s of the server's 15 s keep-alive window), and with the
+digest off keep-alive packets reached the client with at most 8 ms of delay. Frame times need the digest off: a client
+that also computes it (it re-encodes the entries inside the frame that handles them) measured slowest frames up to
+2.7 times higher (I at 8 Mbit/s, give: 512 against 190 ms; see [e2e/realclient](e2e/realclient/README.md)).
+
+The default stays `false`: the rule for switching it on was fewer builds and no half-filled book at no worse maximum
+frame time, and the frame time is worse. Switch it on if a half-filled book or the number of builds matters more to
+you than one frame of roughly 200 to 300 ms on a slow client. `TBD(verify)`: unthrottled real client (G) and through
+ViaFabric (VC).
 
 ## How it works
 
@@ -431,13 +463,37 @@ On or off: both work. The rules for what a connection can send are in [Chunk siz
   `-Drecipebooksplitter.debugDigest=true`, which also hashes the entries), and writing the 9 chunks 473 to 483 ms, 80 %
   of it deflate. The first split after a start took 0.29 to 0.64 s on a loaded VM (a cold JVM needs about 250 to 300 ms
   for the first measuring call alone). Polymer books of 8 to 17 MB took 0.6 to 1.8 s warm and 1.9 to 4.9 s for the first
-  measurement after a start (debug digest on). With 1.1.0 the measured and written times of the same scenario are
-  `TBD(verify)`: X1 and X1b with the old and the new jar.
+  measurement after a start (debug digest on). With 1.1.0 (verification, scenarios X1 and X1b, three runs of ten gives,
+  digest off) measuring took a median of 65 ms on the warm gives (2 to 10) against 58 ms with the 1.0.0 jar: keeping the
+  bytes costs about 7 ms. Writing took 422 ms with compression 256 (almost all deflate) and 8 ms with compression off
+  (the 1.0.0 jar logs no write time).
 - **Other players.** The task runs on the connection's Netty thread, and other connections on that thread wait while it
   runs; the server thread is not blocked. In the 1.0.0 runs the whole task took about 0.55 to 0.6 s warm and 1.1 to
-  2.6 s in the worst cold, loaded case. How long a second player actually waits, old jar against new jar, is
-  `TBD(verify)`: scenarios X1, X1b and X1c (a second connection pings the server every 10 ms; all connections share one
-  event loop thread).
+  2.6 s in the worst cold, loaded case. How long a second player waits was measured with X1 (compression 256), X1b
+  (compression off) and X1c (X1 with `bundleChunks`): a second player, the Prober, pings every 10 ms while ten
+  `recipe take`/`recipe give` cycles run, and all connections share one event loop thread
+  (`-Dio.netty.eventLoopThreads=1`). The table is the slowest ping within 5 s after a give (verification; three runs of
+  ten gives for each jar, so 30 gives; none of the pings went unanswered; "warm" is the 27 gives that were not the first
+  of a run); the 1.0.0 jar has SHA-256 `dbd1226840c4...`:
+
+  | Scenario | Jar | All 30 gives, median | Warm gives, median / p90 / max | The first give of each run |
+  |---|---|---|---|---|
+  | X1, compression 256 | 1.0.0 | 545.7 ms | 523.3 / 589.1 / 631.5 ms | 632.9, 647.1, 723.9 ms |
+  | X1, compression 256 | 1.1.0 | 495.1 ms | 489.6 / 553.2 / 571.4 ms | 743.5, 661.8, 716.9 ms |
+  | X1b, compression off | 1.0.0 | 143.1 ms | 139.0 / 177.4 / 202.9 ms | 260.0, 303.1, 314.7 ms |
+  | X1b, compression off | 1.1.0 | 80.9 ms | 77.6 / 108.6 / 132.5 ms | 231.2, 193.3, 279.5 ms |
+  | X1c, compression 256, `bundleChunks` | 1.1.0 | 485.4 ms | 477.3 / 543.9 / 589.4 ms | 659.9, 605.7, 648.0 ms |
+
+  Warm, the new jar is better: 34 ms (6 %) with compression 256, where deflate (about 420 ms) dominates the write and
+  only the repeated chunk encode is saved, and 61 ms (44 %) with compression off. **The first give after a start is not
+  faster with compression 256**: its stall was 743.5, 661.8 and 716.9 ms against 632.9, 647.1 and 723.9 ms, and the
+  first measuring call took 255, 208 and 213 ms against 157, 182 and 177 ms (with compression off the first give was
+  lower with the new jar, as the warm ones). Three runs cannot separate a real cold-start cost from the spread of fresh
+  JVMs (the gap per run was +110.6, +14.7 and -7.0 ms). In a unit-test pipeline (a scratch test, no compression, 4,457
+  entries, a fresh JVM for each of 8 samples) keeping the bytes did not make the first measuring call slower (median
+  168 ms, 140 to 213, against 188 ms, 129 to 239, without) and the first whole send was faster with encode once (median
+  303 ms, 269 to 361, against 369 ms, 341 to 400, with reuse off), so the extra copy does not explain the slower first
+  measuring call on the server; what does is not established.
 - **Memory.** The kept bytes are about as large as the entries of the book (9.2 MB for the test book), held in 256 KiB
   arrays until the task ends. The first array starts at 256 bytes and doubles, so a packet of one or a few entries keeps
   a few hundred bytes, not 256 KiB (see the cost per unlock above). There is no cap, so a bigger book needs that much heap for a moment
@@ -507,9 +563,8 @@ valid where it is named.
   (a 1.0.0 file with `maxChunkBytes` 2,000,000, where 1.0.0 disconnected this client, is clamped and the same book is
   delivered) and VW3 (the +61 to 63 % direct-list book is delivered at the ceiling); all three passed once in the ceiling
   smoke, on Java 21 only. And VC.
-- Real server timing and the stall of other players, old jar against new jar (X1, X1b, X1c).
-- Real client: B, C, D, E, G, J, K, then H against I on a throttled link, then B and D with a Java 25 server on Loader
-  0.19.0. `bundleChunks` is switched on by default only if H and I show a benefit and nothing fails, and VC and K pass.
+- Real client: B, C, D, E, G, J, then B and D with a Java 25 server on Loader 0.19.0. (H, I and K ran, see
+  [bundleChunks](#bundlechunks), which stays off by default; G and VC are still open.)
 - Optional: the 1.1.0 jar refused by Loader 0.18.6.
 
 ## Building from source

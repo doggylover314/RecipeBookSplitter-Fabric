@@ -14,6 +14,9 @@ Fabric Loader only (no Fabric API). The mod:
   the number of frames and ticks that had completed (`frame`, `tick`);
 - times the background build of the recipe search tree (the lambda that `SessionSearchTrees.updateRecipes` hands to
   `CompletableFuture.supplyAsync`) and counts how many builds actually ran;
+- times every frame (work time, and the share of packet handling, ticks and rendering), counts the frames of at least
+  50 and 100 ms and the background builds scheduled, and logs the delay of every keep-alive packet (see
+  [Frame times](#frame-times));
 - after the recipe book has been quiet for `quietMs` it logs a summary: number of known recipe display ids in the
   `ClientRecipeBook`, highlighted ids, a SHA-256 over the sorted id list, and a SHA-256 over the entries re-encoded with
   `ClientboundRecipeBookAddPacket.Entry.STREAM_CODEC` (the same bytes the mod's `debugDigest` hashes on the server);
@@ -54,9 +57,37 @@ decode to the last handle) and PASS/FAIL assertions (client recipe count against
 and chunk counts, id-list hash after the give and after every relog, client-side entry digest against the server's
 digest, single-frame handling with `bundleChunks`).
 
-Environment variables are listed at the top of `run_client_e2e.sh` and `../lib.sh`. The client needs: `Xvfb`, Mesa's
+Environment variables are listed at the top of `run_client_e2e.sh` and `../lib.sh`; `RBS_DIGEST=0` switches the client's
+entry digest off (see [Frame times](#frame-times)). The client needs: `Xvfb`, Mesa's
 software rasterizer (`libgl1-mesa-dri` with `swrast_dri.so`, `libglx-mesa0`), about 2 GB of heap, JDK 21 and network
 access for the first run. Set `E2E_STDIN` to an empty file where `/dev/null` is not usable: Gradle and Xvfb read it.
+
+## Frame times
+
+The harness times frames passively, by reading the clock in hooks around `Minecraft.runTick`, `Minecraft.tick`,
+`PacketProcessor.processQueuedPackets` and `RenderSystem.limitDisplayFPS`. The work time of a frame is its time in
+`runTick` minus the wait of the frame rate limiter. The kit caps the client at 20 fps (`options.txt`), so every frame
+takes at least 50 ms in all, and an idle one has a work time of a few ms. `analyze.py` prints, for each run (a join),
+the slowest frame, the slowest frame in the window from the first decode of the run's packets to one second after the
+last was handled (with its split into packet handling, ticks and the rest, which is mostly rendering), the slowest
+frame that handled one of the run's packets, how many frames took 50 ms or 100 ms, the background search builds
+scheduled and run, and the largest delay of a keep-alive packet. A keep-alive id is the server's `Util.getMillis()`
+(`System.nanoTime() / 1,000,000`), so the difference to the client's clock is the delay when the server runs on the
+same host, as in the kit. All of it is in `events.jsonl` (the `summary` events, plus a `slowframe` event for each frame of
+100 ms or more and a `keepalive` event for each keep-alive).
+
+**Frame times need the digest off.** With the digest on (the default, and what the assertions that compare the client's
+entry hashes with the server's need) the client re-encodes every entry it received on the render thread, inside the
+frame that handles the packets. For a 9 MB book that adds several hundred ms to the frame, and with `bundleChunks` the
+whole book is handled in one frame, so the bundle's frame looks much worse than it is (verification: the slowest frame
+that handled the book was 512 ms with the digest on and 190 ms with it off for scenario I at 8000 kbit/s, 184 and 95 ms
+for H). Run `RBS_DIGEST=0 run_client_e2e.sh H I` to compare frames; `analyze.py` then skips the two comparisons with the
+server's digest and prints a note when the digest was on. (Gradle drops an environment variable such as
+`ORG_GRADLE_PROJECT_rbs.harness.digest` that has a dot in its name when it is started from the `gradlew` shell script,
+so the script passes `-Prbs.harness.digest=false` itself.)
+
+`python3 -I test_analyze.py` checks `analyze.py` against a synthetic run (the frame table, the digest note, and events from a
+harness without the frame timers); it needs no Minecraft.
 
 ## Pinned third-party files
 
@@ -87,9 +118,12 @@ Xvfb with Mesa 25.2.8 llvmpipe, OpenGL 4.5, vanilla 1.21.11 client, offline mode
   84.5 ms for the first book of a run and 28.3 ms for later joins, 145 chunks 634.9 ms and 110.9 ms (143 chunks). Of the
   145 background search-tree builds scheduled for the first book, 20 to 23 ran.
 
-With the 1.1.0 jar: `TBD(verify)`: A to K. What has not run at all yet is the frame and tick counter added to the harness
-(the `Minecraft.runTick` hook was only compiled and checked against the decompiled source), scenario J (`/reload`), the
-throttled scenarios H and I, and the single-frame assertions of G, I and K.
+With the 1.1.0 jar (verification: jar SHA-256 `24a82085e4ad...`, server on JDK 21.0.11 with Loader 0.19.5, three runs of
+each): H and I at 8000 and at 20000 kbit/s and K passed their assertions, with the digest off
+(11 assertions for H, 13 for I and K) and with it on (13, 15 and 15, which add the comparison of the client's entry hashes
+with the server's digest) and with no disconnect; the single-frame assertion of I and K held in every run (every book in
+one frame and one tick), so the frame and tick counter and the frame timers have run. Numbers are in the main README under
+`bundleChunks`. `TBD(verify)`: A to G and J (`/reload`).
 
 Not covered: Polymer items and ViaFabric with this harness (the investigation drove real 26.1 and 26.2 clients through
 ViaFabric with a throwaway script, and did not inspect their recipe books), online mode, a GPU, sound, other operating

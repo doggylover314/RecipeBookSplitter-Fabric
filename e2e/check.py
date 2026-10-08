@@ -440,7 +440,8 @@ def run_perf_scenario(report, scenario, lines):
             splits = [s for s in server["splits"] if s["chunks"] >= 2]
             report.check(len(splits) >= cycles, f"phase {i}: {len(splits)} split lines for {cycles} gives")
             if splits:
-                report.note(f"phase {i}: measure ms median {statistics.median(s['ms'] for s in splits)}, max {max(s['ms'] for s in splits)}"
+                report.note(f"phase {i}: measure ms median {statistics.median(s['ms'] for s in splits)}, max {max(s['ms'] for s in splits)}, "
+                            f"first {splits[0]['ms']} (cold)"
                             + (f"; write ms median {statistics.median(s['write_ms'] for s in splits)}, max {max(s['write_ms'] for s in splits)}"
                                if all(s["write_ms"] is not None for s in splits) else " (this jar logs no write time)"))
         elif action == "relog":
@@ -467,6 +468,12 @@ def run_perf_scenario(report, scenario, lines):
             p90 = ordered[min(len(ordered) - 1, int(0.9 * len(ordered)))]
             report.note(f"Prober's slowest ping within 5 s after each of {len(worst)} gives (ms): median {statistics.median(ordered):.1f}, "
                         f"p90 {p90:.1f}, max {ordered[-1]:.1f}")
+            warm = sorted(w for w in worst[1:] if w == w)
+            if warm:
+                # With ten gives the p90 is the largest value, and that is the first give after the start (a cold JVM).
+                warm_p90 = warm[min(len(warm) - 1, int(0.9 * len(warm)))]
+                report.note(f"  the first give (cold JVM): {worst[0]:.1f}; the other {len(warm)} gives: median {statistics.median(warm):.1f}, "
+                            f"p90 {warm_p90:.1f}, max {warm[-1]:.1f}")
         all_rtt = sorted(rtt for _, rtt in prober["pings"])
         report.note(f"all {len(all_rtt)} pings (ms): median {statistics.median(all_rtt):.1f}, p99 {all_rtt[int(0.99 * (len(all_rtt) - 1))]:.1f}, max {all_rtt[-1]:.1f}")
 

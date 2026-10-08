@@ -95,6 +95,7 @@ def main():
     disconnects = [e for e in events if e["event"] == "disconnect"]
     unexpected = [e for e in disconnects if not e["expected"]]
     exit_ev = [e for e in events if e["event"] == "exit"]
+    digest_on = next((e.get("digest", True) for e in events if e["event"] == "init"), True)
 
     out = {"scenario": scenario, "joins": len(joins), "disconnects": disconnects, "exit": exit_ev,
            "server": {k: v for k, v in server.items()}, "runs": []}
@@ -144,6 +145,12 @@ def main():
             "rebuildAvgMs": statistics.mean([h["rebuildCollectionsMs"] for h in r["handle"]]) if r["handle"] else 0,
             "searchUpdateAvgMs": statistics.mean([h["searchTreeUpdateMs"] for h in r["handle"]]) if r["handle"] else 0,
             "handleMsList": handles,
+            # frame work time = Minecraft.runTick minus the wait of the frame rate limiter (see Harness)
+            "frameWorkMaxMs": s.get("runMaxFrameWorkMs"), "handleFramesMaxWorkMs": s.get("handleFramesMaxWorkMs"),
+            "bookMaxFrameWorkMs": s.get("bookMaxFrameWorkMs"), "bookMaxFrame": s.get("bookMaxFrame"),
+            "framesOver50Ms": s.get("runFramesOver50WorkMs"), "framesOver100Ms": s.get("runFramesOver100WorkMs"),
+            "searchBuildsScheduled": s.get("searchUpdatesSinceLast"), "keepAlives": s.get("keepAlives"),
+            "keepAliveMaxDelayMs": s.get("keepAliveMaxDelayMs"),
             # a book is handled in one frame when it arrived in one bundle; loose packets may take several
             "distinctFrames": len({h["frame"] for h in r["handle"] if "frame" in h}),
             "distinctTicks": len({h["tick"] for h in r["handle"] if "tick" in h}),
@@ -158,6 +165,25 @@ def main():
               f"{s['runFirstDecodeToLastHandleMs']:>20}")
     print("(bg_builds = background search-tree builds that ran; one build is scheduled per packet handled, so pkts - bg_builds were "
           "cancelled before they started; frames = distinct frames in which the run's packets were handled, ticks = ticks they span)")
+
+    if any(r["summary"].get("runMaxFrameWorkMs") is not None for r in runs):
+        def f(v):
+            return "-" if v is None else f"{v:g}"
+
+        print()
+        print("frame work time in ms (Minecraft.runTick minus the frame rate limiter's wait; an idle frame takes a few ms):")
+        print("run  pkts  slowest_frame  slowest_in_book_window  (packets/ticks/render)  slowest_packet_frame  "
+              "frames>=50  frames>=100  builds_scheduled/ran  keepalive_max_delay")
+        for i, row in enumerate(out["runs"], 1):
+            w = row["bookMaxFrame"] or {}
+            split = "/".join(f(w.get(k)) for k in ("packetsMs", "tickMs", "renderMs")) if w else "-"
+            print(f"{i:>3}  {row['packets']:>4}  {f(row['frameWorkMaxMs']):>13}  {f(row['bookMaxFrameWorkMs']):>22}  "
+                  f"{split:>22}  {f(row['handleFramesMaxWorkMs']):>20}  {f(row['framesOver50Ms']):>10}  "
+                  f"{f(row['framesOver100Ms']):>11}  {f(row['searchBuildsScheduled']) + '/' + f(row['bgBuilds']):>20}  "
+                  f"{f(row['keepAliveMaxDelayMs']):>19}")
+        if digest_on:
+            print("NOTE: the client's digest was on (RBS_DIGEST=1): it re-encodes the received entries on the render thread "
+                  "inside the frame that handles them, so these frame times are inflated. Use RBS_DIGEST=0 to time frames.")
 
     # Main-thread cost per packet against the size of the recipe book at that point (rebuildCollections is O(known)).
     print()
